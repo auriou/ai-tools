@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+*.log
+.token-optimizer/
+.DS_Store
+Thumbs.db
+desktop.ini
