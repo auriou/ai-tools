@@ -141,7 +141,7 @@ The manager stores its files under `~/.ai-tools` (`%USERPROFILE%\.ai-tools` on W
 
 Other tools retain their own installation locations: Token Optimizer uses global npm packages, Serena uses uv, and Codebase Memory uses its official installer. The state file is a record, not the source of truth: actual installed versions are checked on each run.
 
-For selected MCP tools, the scripts configure detected VS Code and VS Code Insiders user profiles. Managed server entries are added or replaced; unrelated entries are retained. Existing MCP files are backed up before writing. JSONC files that cannot be parsed are left unchanged with a warning.
+For selected MCP tools, the scripts configure the portable Copilot user MCP file at `$COPILOT_HOME/mcp-config.json`, or `~/.copilot/mcp-config.json` when `COPILOT_HOME` is not set. Managed server entries are added or replaced under `mcpServers`; unrelated entries are retained. The file is backed up before writing, and files that cannot be parsed are left unchanged with a warning. The portable file is shared across Copilot profiles and compatible Copilot tools. Legacy per-profile VS Code `mcp.json` files are not modified; use VS Code's **Migrate** action to move existing servers, or the same server may remain configured in both locations.
 
 When Codex is available, missing MCP servers are added through its CLI, Token Optimizer timeouts are configured, and a managed instruction block is added to its global `AGENTS.md`. Codex paths respect `CODEX_HOME`, defaulting to `~/.codex`. Existing Codex servers are not replaced merely because their command differs.
 

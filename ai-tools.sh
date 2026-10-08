@@ -57,6 +57,8 @@ CBM_API_LATEST="https://api.github.com/repos/DeusData/codebase-memory-mcp/releas
 # Copilot global user instructions
 COPILOT_INSTRUCTIONS_DIR="$HOME/.copilot/instructions"
 AI_INSTRUCTION_FILE="$COPILOT_INSTRUCTIONS_DIR/ai-tools.instructions.md"
+COPILOT_CONFIG_HOME="${COPILOT_HOME:-$HOME/.copilot}"
+COPILOT_MCP_CONFIG_PATH="$COPILOT_CONFIG_HOME/mcp-config.json"
 
 # Codex global user instructions
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
@@ -852,7 +854,7 @@ install_or_update_rtk() {
         fi
     fi
 
-    if [ -n "$(get_vscode_mcp_targets)" ]; then
+    if [ -n "$(get_copilot_mcp_targets)" ]; then
         write_info "Copilot detected -> checking/initializing global RTK integration..."
         if "$RTK_EXE" init -g --copilot >/dev/null 2>&1; then
             write_info "RTK init -g --copilot completed."
@@ -1178,38 +1180,16 @@ install_or_update_codebase_memory() {
 }
 
 # ===========================================================================
-# MCP configuration for VS Code / VS Code Insiders
+# Copilot global MCP configuration
 # ===========================================================================
 
-get_vscode_mcp_targets() {
-    local targets=()
-
-    if command -v code >/dev/null 2>&1 || [ -d "$HOME/.config/Code" ]; then
-        local user_dir="$HOME/.config/Code/User"
-        targets+=("$user_dir/mcp.json")
-        if [ -d "$user_dir/profiles" ]; then
-            local d
-            for d in "$user_dir/profiles"/*/; do
-                [ -d "$d" ] && targets+=("${d%/}/mcp.json")
-            done
-        fi
+get_copilot_mcp_targets() {
+    if command -v code >/dev/null 2>&1 ||
+       command -v code-insiders >/dev/null 2>&1 ||
+       command -v copilot >/dev/null 2>&1 ||
+       [ -f "$COPILOT_MCP_CONFIG_PATH" ]; then
+        printf '%s\n' "$COPILOT_MCP_CONFIG_PATH"
     fi
-
-    if command -v code-insiders >/dev/null 2>&1 || [ -d "$HOME/.config/Code - Insiders" ]; then
-        local user_dir="$HOME/.config/Code - Insiders/User"
-        targets+=("$user_dir/mcp.json")
-        if [ -d "$user_dir/profiles" ]; then
-            local d
-            for d in "$user_dir/profiles"/*/; do
-                [ -d "$d" ] && targets+=("${d%/}/mcp.json")
-            done
-        fi
-    fi
-
-    local t
-    for t in "${targets[@]}"; do
-        printf '%s\n' "$t"
-    done | awk '!seen[$0]++'
 }
 
 set_mcp_servers_in_file() {
@@ -1228,17 +1208,17 @@ set_mcp_servers_in_file() {
     local changed=false
 
     case ",$selected_csv," in *,TokenOptimizer,*)
-        config=$(printf '%s' "$config" | "$JQ" '.servers = ((.servers // {}) + {"token-optimizer": {type:"stdio", command:"npx", args:["-y","@ooples/token-optimizer-mcp@latest"]}})')
+        config=$(printf '%s' "$config" | "$JQ" '.mcpServers = ((.mcpServers // {}) + {"token-optimizer": {type:"stdio", command:"npx", args:["-y","@ooples/token-optimizer-mcp@latest"]}})')
         changed=true
     ;; esac
 
     case ",$selected_csv," in *,Serena,*)
-        config=$(printf '%s' "$config" | "$JQ" '.servers = ((.servers // {}) + {"serena": {type:"stdio", command:"serena", args:["start-mcp-server","--context=vscode"]}})')
+        config=$(printf '%s' "$config" | "$JQ" '.mcpServers = ((.mcpServers // {}) + {"serena": {type:"stdio", command:"serena", args:["start-mcp-server","--context=vscode"]}})')
         changed=true
     ;; esac
 
     case ",$selected_csv," in *,CodebaseMemory,*)
-        config=$(printf '%s' "$config" | "$JQ" '.servers = ((.servers // {}) + {"codebase-memory": {type:"stdio", command:"codebase-memory-mcp", args:[]}})')
+        config=$(printf '%s' "$config" | "$JQ" '.mcpServers = ((.mcpServers // {}) + {"codebase-memory": {type:"stdio", command:"codebase-memory-mcp", args:[]}})')
         changed=true
     ;; esac
 
@@ -1261,9 +1241,9 @@ set_mcp_servers_in_file() {
     write_info "MCP configured: $path"
 }
 
-configure_vscode_mcp() {
+configure_copilot_mcp() {
     local selected_csv="$1"
-    write_section "MCP VS Code / VS Code Insiders"
+    write_section "Copilot global MCP configuration"
 
     local mcp_relevant=false
     case ",$selected_csv," in *,TokenOptimizer,*|*,Serena,*|*,CodebaseMemory,*) mcp_relevant=true ;; esac
@@ -1272,9 +1252,9 @@ configure_vscode_mcp() {
         return
     fi
 
-    local targets; targets=$(get_vscode_mcp_targets)
+    local targets; targets=$(get_copilot_mcp_targets)
     if [ -z "$targets" ]; then
-        write_warn "VS Code / VS Code Insiders not detected. Configure MCP servers after installing the IDE."
+        write_warn "VS Code / Copilot not detected. Configure MCP servers after installing or configuring Copilot."
         return
     fi
 
@@ -1809,7 +1789,7 @@ main() {
     case ",$selected_csv," in *,Serena,*) install_or_update_serena || exit 1 ;; esac
     case ",$selected_csv," in *,CodebaseMemory,*) install_or_update_codebase_memory || exit 1 ;; esac
 
-    configure_vscode_mcp "$selected_csv" || return 1
+    configure_copilot_mcp "$selected_csv" || return 1
     configure_codex_integration "$selected_csv" || exit 1
     configure_copilot_instructions "$selected_csv" || return 1
 

@@ -153,6 +153,8 @@ $CbmApiLatest    = "https://api.github.com/repos/DeusData/codebase-memory-mcp/re
 # Copilot global user instructions
 $CopilotInstructionsDir = Join-Path $env:USERPROFILE ".copilot\instructions"
 $AiInstructionFile      = Join-Path $CopilotInstructionsDir "ai-tools.instructions.md"
+$CopilotHome             = if (-not [string]::IsNullOrWhiteSpace($env:COPILOT_HOME)) { $env:COPILOT_HOME } else { Join-Path $env:USERPROFILE ".copilot" }
+$CopilotMcpConfigPath    = Join-Path $CopilotHome "mcp-config.json"
 
 # Codex global user instructions
 $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
@@ -691,7 +693,7 @@ function Install-OrUpdate-Rtk($State) {
         }
     }
 
-    if (@(Get-VsCodeMcpTargets).Count -gt 0) {
+    if (@(Get-CopilotMcpTargets).Count -gt 0) {
         try {
             Write-Info "Copilot detected -> checking/initializing global RTK integration..."
             & $RtkExe init -g --copilot | Out-Null
@@ -1058,7 +1060,7 @@ function Install-OrUpdate-CodebaseMemory($State) {
 }
 
 # ===========================================================================
-# MCP configuration for VS Code / Insiders
+# Copilot global MCP configuration
 # ===========================================================================
 
 function Get-ExecutablePath([string]$CommandName,[string]$Fallback) {
@@ -1087,25 +1089,23 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
         $config = [pscustomobject]@{}
     }
 
-    if (-not $config.PSObject.Properties["servers"]) {
-        $config | Add-Member -MemberType NoteProperty -Name "servers" -Value ([pscustomobject]@{})
+    if (-not $config.PSObject.Properties["mcpServers"]) {
+        $config | Add-Member -MemberType NoteProperty -Name "mcpServers" -Value ([pscustomobject]@{})
     }
 
     $changed = $false
 
-    # Use command names resolved through PATH instead of absolute paths.
-    # This keeps mcp.json portable with VS Code Settings Sync across PCs
-    # with different Windows usernames.
+    # Copilot's portable MCP configuration is shared across profiles and tools.
     if ($Selected -contains "TokenOptimizer") {
         $value = [pscustomobject]@{
             type    = "stdio"
             command = "npx"
             args    = @("-y","@ooples/token-optimizer-mcp@latest")
         }
-        if ($config.servers.PSObject.Properties["token-optimizer"]) {
-            $config.servers."token-optimizer" = $value
+        if ($config.mcpServers.PSObject.Properties["token-optimizer"]) {
+            $config.mcpServers."token-optimizer" = $value
         } else {
-            $config.servers | Add-Member NoteProperty "token-optimizer" $value
+            $config.mcpServers | Add-Member NoteProperty "token-optimizer" $value
         }
         $changed = $true
     }
@@ -1116,10 +1116,10 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
             command = "serena"
             args    = @("start-mcp-server","--context=vscode")
         }
-        if ($config.servers.PSObject.Properties["serena"]) {
-            $config.servers.serena = $value
+        if ($config.mcpServers.PSObject.Properties["serena"]) {
+            $config.mcpServers.serena = $value
         } else {
-            $config.servers | Add-Member NoteProperty "serena" $value
+            $config.mcpServers | Add-Member NoteProperty "serena" $value
         }
         $changed = $true
     }
@@ -1130,10 +1130,10 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
             command = "codebase-memory-mcp"
             args    = @()
         }
-        if ($config.servers.PSObject.Properties["codebase-memory"]) {
-            $config.servers."codebase-memory" = $value
+        if ($config.mcpServers.PSObject.Properties["codebase-memory"]) {
+            $config.mcpServers."codebase-memory" = $value
         } else {
-            $config.servers | Add-Member NoteProperty "codebase-memory" $value
+            $config.mcpServers | Add-Member NoteProperty "codebase-memory" $value
         }
         $changed = $true
     }
@@ -1158,46 +1158,26 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
     Write-Info "MCP configured: $Path"
 }
 
-function Get-VsCodeMcpTargets {
-    $targets = New-Object System.Collections.Generic.List[string]
-
+function Get-CopilotMcpTargets {
     $stableInstalled = (Test-Command "code") -or
                        (Test-Path "$env:LOCALAPPDATA\Programs\Microsoft VS Code") -or
                        (Test-Path "$env:APPDATA\Code")
-
-    if ($stableInstalled) {
-        $user = Join-Path $env:APPDATA "Code\User"
-        $targets.Add((Join-Path $user "mcp.json"))
-
-        $profiles = Join-Path $user "profiles"
-        if (Test-Path $profiles) {
-            Get-ChildItem $profiles -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-                $targets.Add((Join-Path $_.FullName "mcp.json"))
-            }
-        }
-    }
 
     $insidersInstalled = (Test-Command "code-insiders") -or
                          (Test-Path "$env:LOCALAPPDATA\Programs\Microsoft VS Code Insiders") -or
                          (Test-Path "$env:APPDATA\Code - Insiders")
 
-    if ($insidersInstalled) {
-        $user = Join-Path $env:APPDATA "Code - Insiders\User"
-        $targets.Add((Join-Path $user "mcp.json"))
-
-        $profiles = Join-Path $user "profiles"
-        if (Test-Path $profiles) {
-            Get-ChildItem $profiles -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-                $targets.Add((Join-Path $_.FullName "mcp.json"))
-            }
-        }
+    $copilotCliInstalled = Test-Command "copilot"
+    if (-not ($stableInstalled -or $insidersInstalled -or $copilotCliInstalled) -and
+        -not (Test-Path $CopilotMcpConfigPath)) {
+        return @()
     }
 
-    return @($targets | Select-Object -Unique)
+    return @($CopilotMcpConfigPath)
 }
 
-function Configure-VsCodeMcp([string[]]$Selected) {
-    Write-Section "MCP VS Code / VS Code Insiders"
+function Configure-CopilotMcp([string[]]$Selected) {
+    Write-Section "Copilot global MCP configuration"
 
     $mcpTools = @($Selected | Where-Object { $_ -in @("TokenOptimizer","Serena","CodebaseMemory") })
     if ($mcpTools.Count -eq 0) {
@@ -1205,9 +1185,9 @@ function Configure-VsCodeMcp([string[]]$Selected) {
         return
     }
 
-    $targets = @(Get-VsCodeMcpTargets)
+    $targets = @(Get-CopilotMcpTargets)
     if ($targets.Count -eq 0) {
-        Write-Warn2 "VS Code / VS Code Insiders not detected. Configure MCP servers after installing the IDE."
+        Write-Warn2 "VS Code / Copilot not detected. Configure MCP servers after installing or configuring Copilot."
         return
     }
 
@@ -1685,7 +1665,7 @@ try {
     if ($selected -contains "CodebaseMemory") { Install-OrUpdate-CodebaseMemory $state }
 
     # Configure MCP only after binaries are installed / available.
-    Configure-VsCodeMcp $selected
+    Configure-CopilotMcp $selected
     Configure-CodexIntegration $selected
     Configure-CopilotInstructions $selected
 
