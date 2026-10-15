@@ -308,6 +308,20 @@ function Invoke-External {
     }
 }
 
+function Invoke-ExternalWithRetry {
+    param(
+        [Parameter(Mandatory=$true)][string]$Operation,
+        [Parameter(Mandatory=$true)][scriptblock]$Action
+    )
+    try {
+        & $Action
+    } catch {
+        Write-Warn2 "$Operation failed; retrying once in 2 seconds. $($_.Exception.Message)"
+        Start-Sleep -Seconds 2
+        & $Action
+    }
+}
+
 function Normalize-Version([string]$Version) {
     if ([string]::IsNullOrWhiteSpace($Version)) { return $null }
     $m = [regex]::Match($Version, 'v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z\.-]+)?)')
@@ -908,7 +922,9 @@ function Install-OrUpdate-Serena($State) {
             Invoke-External uv "tool" "install" "-p" "3.13" $SerenaTool
         } elseif ($latest -and -not (Compare-VersionText $installed $latest)) {
             $wasUpdated = $true
-            Invoke-External uv "tool" "upgrade" $SerenaTool
+            Invoke-ExternalWithRetry -Operation "Serena upgrade" -Action {
+                Invoke-External uv "tool" "upgrade" $SerenaTool
+            }
         } else {
             Write-Info "Serena is already up to date."
         }

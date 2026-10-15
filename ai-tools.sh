@@ -1067,8 +1067,12 @@ install_or_update_serena() {
         elif [ -n "$latest" ] && ! compare_version_text "$installed" "$latest"; then
             was_updated=true
             if ! uv tool upgrade "$SERENA_TOOL"; then
-                write_fail "Serena update failed."
-                return 1
+                write_warn "Serena update failed; retrying once in 2 seconds."
+                sleep 2
+                if ! uv tool upgrade "$SERENA_TOOL"; then
+                    write_fail "Serena update failed after retry."
+                    return 1
+                fi
             fi
         else
             write_info "Serena is already up to date."
