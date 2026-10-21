@@ -1648,7 +1648,7 @@ try {
 
     # Diagnostics must never modify the saved selection.
     if (-not $Check) {
-        if ($ForceReinstall) {
+        if ($ForceReinstall -or ($Tools -and -not $All)) {
             $state.selectedTools = @((@($state.selectedTools) + $selected) | Select-Object -Unique)
         } else {
             $state.selectedTools = @($selected)

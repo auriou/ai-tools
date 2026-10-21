@@ -1764,7 +1764,7 @@ main() {
 
     if [ "$CHECK" != true ]; then
         local managed_csv="$selected_csv"
-        if [ "$FORCE_REINSTALL" = true ]; then
+        if [ "$FORCE_REINSTALL" = true ] || { [ -n "$TOOLS" ] && [ "$ALL" != true ]; }; then
             managed_csv=$(printf '%s' "$(state_get_selected_tools),$selected_csv" | "$JQ" -Rr 'split(",") | map(select(length > 0)) | unique | join(",")') || return 1
         fi
         state_set_selected_tools "$managed_csv" || return 1
