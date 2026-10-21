@@ -1217,7 +1217,7 @@ set_mcp_servers_in_file() {
     ;; esac
 
     case ",$selected_csv," in *,Serena,*)
-        config=$(printf '%s' "$config" | "$JQ" '.mcpServers = ((.mcpServers // {}) + {"serena": {type:"stdio", command:"serena", args:["start-mcp-server","--context=vscode"]}})')
+        config=$(printf '%s' "$config" | "$JQ" '.mcpServers = ((.mcpServers // {}) + {"serena": {type:"stdio", command:"serena", args:["start-mcp-server","--context=vscode","--open-web-dashboard","false"]}})')
         changed=true
     ;; esac
 
@@ -1457,7 +1457,7 @@ configure_codex_integration() {
             return 1
         fi
     fi
-    if [[ ",$selected_csv," == *,Serena,* ]] && ! add_codex_mcp_server "serena" "serena" "start-mcp-server" "--project-from-cwd" && [ "$CHECK" != true ]; then
+    if [[ ",$selected_csv," == *,Serena,* ]] && ! add_codex_mcp_server "serena" "serena" "start-mcp-server" "--project-from-cwd" "--open-web-dashboard" "false" && [ "$CHECK" != true ]; then
         return 1
     fi
     if [[ ",$selected_csv," == *,CodebaseMemory,* ]] && ! add_codex_mcp_server "codebase-memory-mcp" "codebase-memory-mcp" && [ "$CHECK" != true ]; then

@@ -1130,7 +1130,7 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
         $value = [pscustomobject]@{
             type    = "stdio"
             command = "serena"
-            args    = @("start-mcp-server","--context=vscode")
+            args    = @("start-mcp-server","--context=vscode","--open-web-dashboard","false")
         }
         if ($config.mcpServers.PSObject.Properties["serena"]) {
             $config.mcpServers.serena = $value
@@ -1370,7 +1370,7 @@ function Configure-CodexIntegration([string[]]$Selected) {
         }
     }
     if ($Selected -contains "Serena") {
-        $null = Add-CodexMcpServer "serena" "serena" @("start-mcp-server","--project-from-cwd")
+        $null = Add-CodexMcpServer "serena" "serena" @("start-mcp-server","--project-from-cwd","--open-web-dashboard","false")
     }
     if ($Selected -contains "CodebaseMemory") {
         $null = Add-CodexMcpServer "codebase-memory-mcp" "codebase-memory-mcp" @()
