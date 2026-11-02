@@ -1222,7 +1222,7 @@ set_mcp_servers_in_file() {
     ;; esac
 
     case ",$selected_csv," in *,CodebaseMemory,*)
-        config=$(printf '%s' "$config" | "$JQ" '.mcpServers = ((.mcpServers // {}) + {"codebase-memory": {type:"stdio", command:"codebase-memory-mcp", args:[]}})')
+        config=$(printf '%s' "$config" | "$JQ" '.mcpServers = (((.mcpServers // {}) | del(."codebase-memory")) + {"codebase-memory-mcp": {type:"stdio", command:"codebase-memory-mcp", args:[]}})')
         changed=true
     ;; esac
 

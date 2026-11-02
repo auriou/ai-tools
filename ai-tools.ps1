@@ -1079,11 +1079,23 @@ function Install-OrUpdate-CodebaseMemory($State) {
 # Copilot global MCP configuration
 # ===========================================================================
 
-function Get-ExecutablePath([string]$CommandName,[string]$Fallback) {
-    $cmd = Get-Command $CommandName -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    if ($Fallback -and (Test-Path $Fallback)) { return $Fallback }
-    return $CommandName
+function Set-McpServerEntry([object]$Servers,[string]$Name,[object]$Value) {
+    if ($Servers.PSObject.Properties[$Name]) {
+        $Servers.$Name = $Value
+    } else {
+        $Servers | Add-Member -MemberType NoteProperty -Name $Name -Value $Value | Out-Null
+    }
+}
+
+function Move-McpServerEntry([object]$Servers,[string]$OldName,[string]$NewName) {
+    $oldEntry = $Servers.PSObject.Properties[$OldName]
+    if (-not $oldEntry) { return $false }
+
+    if (-not $Servers.PSObject.Properties[$NewName]) {
+        $Servers | Add-Member -MemberType NoteProperty -Name $NewName -Value $oldEntry.Value | Out-Null
+    }
+    $Servers.PSObject.Properties.Remove($OldName)
+    return $true
 }
 
 function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
@@ -1109,7 +1121,7 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
         $config | Add-Member -MemberType NoteProperty -Name "mcpServers" -Value ([pscustomobject]@{})
     }
 
-    $changed = $false
+    $changed = Move-McpServerEntry $config.mcpServers "codebase-memory" "codebase-memory-mcp"
 
     # Copilot's portable MCP configuration is shared across profiles and tools.
     if ($Selected -contains "TokenOptimizer") {
@@ -1118,11 +1130,7 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
             command = "npx"
             args    = @("-y","@ooples/token-optimizer-mcp@latest")
         }
-        if ($config.mcpServers.PSObject.Properties["token-optimizer"]) {
-            $config.mcpServers."token-optimizer" = $value
-        } else {
-            $config.mcpServers | Add-Member NoteProperty "token-optimizer" $value
-        }
+        Set-McpServerEntry $config.mcpServers "token-optimizer" $value
         $changed = $true
     }
 
@@ -1132,11 +1140,7 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
             command = "serena"
             args    = @("start-mcp-server","--context=vscode","--open-web-dashboard","false")
         }
-        if ($config.mcpServers.PSObject.Properties["serena"]) {
-            $config.mcpServers.serena = $value
-        } else {
-            $config.mcpServers | Add-Member NoteProperty "serena" $value
-        }
+        Set-McpServerEntry $config.mcpServers "serena" $value
         $changed = $true
     }
 
@@ -1146,11 +1150,7 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
             command = "codebase-memory-mcp"
             args    = @()
         }
-        if ($config.mcpServers.PSObject.Properties["codebase-memory"]) {
-            $config.mcpServers."codebase-memory" = $value
-        } else {
-            $config.mcpServers | Add-Member NoteProperty "codebase-memory" $value
-        }
+        Set-McpServerEntry $config.mcpServers "codebase-memory-mcp" $value
         $changed = $true
     }
 
