@@ -1121,7 +1121,7 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
         $config | Add-Member -MemberType NoteProperty -Name "mcpServers" -Value ([pscustomobject]@{})
     }
 
-    $changed = Move-McpServerEntry $config.mcpServers "codebase-memory" "codebase-memory-mcp"
+    $changed = Move-McpServerEntry $config.mcpServers "codebase-memory-mcp" "codebase-memory"
 
     # Copilot's portable MCP configuration is shared across profiles and tools.
     if ($Selected -contains "TokenOptimizer") {
@@ -1150,7 +1150,7 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
             command = "codebase-memory-mcp"
             args    = @()
         }
-        Set-McpServerEntry $config.mcpServers "codebase-memory-mcp" $value
+        Set-McpServerEntry $config.mcpServers "codebase-memory" $value
         $changed = $true
     }
 
