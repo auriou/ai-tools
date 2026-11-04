@@ -1125,6 +1125,19 @@ get_cbm_latest_version() {
 }
 
 install_cbm_official() {
+    local mode
+    if [ -d "$CBM_INSTALL_DIR" ]; then
+        mode=$(stat -Lc '%a' "$CBM_INSTALL_DIR") || {
+            write_fail "Cannot inspect permissions of $CBM_INSTALL_DIR."
+            return 1
+        }
+        if [[ "$mode" =~ ^[0-7]+$ ]] && (( (8#$mode & 8#022) != 0 )); then
+            write_fail "Codebase Memory requires $CBM_INSTALL_DIR to be non-writable by group and others (current mode: $mode)."
+            write_fail "Review the directory permissions, then run: chmod go-w \"\$HOME/.local/bin\""
+            write_fail "Retry the full installation with: \"\$HOME/.ai-tools/bin/ai-tools\" --all"
+            return 1
+        fi
+    fi
     if ! curl -fsSL "$CBM_INSTALLER_URL" | bash -s -- --skip-config; then
         write_fail "Official Codebase Memory installation failed."
         return 1

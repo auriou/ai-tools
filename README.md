@@ -152,6 +152,7 @@ Windows uses the user PATH. Linux adds PATH entries to existing `~/.bashrc` and 
 ## Troubleshooting
 
 - **`ai-tools` is not found:** open a new terminal. On Linux, source your shell startup file if necessary. On Windows, restart applications that were already running.
+- **Codebase Memory rejects `~/.local/bin` permissions on Linux:** review the directory's permissions, then run `chmod go-w "$HOME/.local/bin"` and retry with `"$HOME/.ai-tools/bin/ai-tools" --all` to finish installation and configuration.
 - **A prerequisite is missing:** install it manually or rerun without the prerequisite-skip option. For WinGet, install Microsoft's App Installer if needed.
 - **An MCP configuration is skipped:** check the warning and the JSON syntax. Comments or trailing commas in JSONC may prevent parsing.
 - **A dashboard is unavailable:** install/select its tool first. For Token Optimizer, do not skip the dashboard build, and ensure Git is available. Local dashboard changes are preserved rather than overwritten by a Git update.
