@@ -45,6 +45,13 @@ if [ -x /usr/lib/chatgpt/resources/codex ]; then
     ensure_codex_cli_path
     test "$(command -v codex)" = /usr/lib/chatgpt/resources/codex
     test ! -e "$HOME/.profile"
+    export PATH="$test_dir/bin:/usr/bin:/bin"
+    hash -r
+    CHECK=false
+    ensure_codex_cli_path
+    test "$(command -v codex)" = /usr/lib/chatgpt/resources/codex
+    grep -Fqx 'export PATH="/usr/lib/chatgpt/resources:$PATH"  # added by ai-tools (/usr/lib/chatgpt/resources)' "$HOME/.profile"
+    PATH=/usr/bin:/bin bash -c 'source "$HOME/.profile"; test "$(command -v codex)" = /usr/lib/chatgpt/resources/codex'
     (
         export CODEX_HOME="$test_dir/real-codex"
         CODEX_AGENTS_FILE="$CODEX_HOME/AGENTS.md"

@@ -112,7 +112,7 @@ param(
     [switch]$SkipPrerequisiteInstall
 )
 
-$AiToolsVersion = "1.1.1"
+$AiToolsVersion = "1.1.2"
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"

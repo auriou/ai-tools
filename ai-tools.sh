@@ -13,7 +13,7 @@
 
 set -uo pipefail
 
-AI_TOOLS_VERSION="1.1.1"
+AI_TOOLS_VERSION="1.1.2"
 
 # ===========================================================================
 # Managed locations
@@ -307,7 +307,7 @@ ensure_codex_cli_path() {
         "$HOME"/.vscode/extensions/openai.chatgpt-*/bin/"$platform"/codex \
         "$HOME"/.vscode-insiders/extensions/openai.chatgpt-*/bin/"$platform"/codex; do
         if [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
-            export PATH="$(dirname "$candidate"):$PATH"
+            add_user_path "$(dirname "$candidate")" || return 1
             hash -r 2>/dev/null || true
             write_info "Bundled Codex CLI detected: $candidate"
             return 0

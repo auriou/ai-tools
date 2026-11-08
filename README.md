@@ -63,7 +63,7 @@ After installation, open a new terminal. On Windows, fully restart VS Code, VS C
 
 ## Running a downloaded manager script
 
-The Windows and Linux scripts contain a shared manager version (currently `1.1.1`). When executed from Downloads or another path outside the installed manager, they compare this version with the user's installed copy **before** changing anything:
+The Windows and Linux scripts contain a shared manager version (currently `1.1.2`). When executed from Downloads or another path outside the installed manager, they compare this version with the user's installed copy **before** changing anything:
 
 | Installed manager | Behavior |
 | --- | --- |
