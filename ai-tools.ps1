@@ -9,6 +9,7 @@
     - Token Optimizer MCP + dashboard
     - Serena + dashboard
     - Codebase Memory MCP + Graph UI
+    - REA (Android APK reverse engineering MCP)
 
     The script installs itself in:
     %USERPROFILE%\.ai-tools\bin\ai-tools.ps1
@@ -58,7 +59,7 @@
     .\ai-tools.ps1 -All
         Selects all four tools without prompting.
 
-    .\ai-tools.ps1 -Tools RTK,TokenOptimizer,Serena,CodebaseMemory
+    .\ai-tools.ps1 -Tools RTK,TokenOptimizer,Serena,CodebaseMemory,REA
         Explicit selection, useful for automation.
 
     .\ai-tools.ps1 dash
@@ -93,10 +94,10 @@ param(
     [switch]$All,
     [switch]$ForceReinstall,
 
-    [ValidateSet("RTK","TokenOptimizer","Serena","CodebaseMemory")]
+    [ValidateSet("RTK","TokenOptimizer","Serena","CodebaseMemory","REA")]
     [string[]]$Tools,
 
-    [ValidateSet("RTK","TokenOptimizer","Serena","CodebaseMemory")]
+    [ValidateSet("RTK","TokenOptimizer","Serena","CodebaseMemory","REA")]
     [string]$UI,
 
     [Parameter(Position=0)]
@@ -147,6 +148,10 @@ $SerenaPypi   = "https://pypi.org/pypi/serena-agent/json"
 # Codebase Memory
 $CbmInstallDir   = Join-Path $env:LOCALAPPDATA "Programs\codebase-memory-mcp"
 $CbmExe          = Join-Path $CbmInstallDir "codebase-memory-mcp.exe"
+$ReaPrefix = Join-Path $AiRoot "npm"
+$ReaExe = Join-Path $ReaPrefix "rea.cmd"
+$ReaPackage = "rea-agents"
+
 $CbmInstallerUrl = "https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1"
 $CbmApiLatest    = "https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest"
 
@@ -160,7 +165,7 @@ $CopilotMcpConfigPath    = Join-Path $CopilotHome "mcp-config.json"
 $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
 $CodexAgentsFile = Join-Path $CodexHome "AGENTS.md"
 
-$AllToolNames = @("RTK","TokenOptimizer","Serena","CodebaseMemory")
+$AllToolNames = @("RTK","TokenOptimizer","Serena","CodebaseMemory","REA")
 
 # ===========================================================================
 # Output
@@ -208,6 +213,10 @@ function Show-ToolDescriptions {
     Write-Host "   Useful for: architecture, dependencies, calls, impact, and semantic search."
     Write-Host "   Includes a local Graph UI."
     Write-Host "   In short: 'understand the whole repository'."
+    Write-Host ""
+    Write-Host "5. REA" -ForegroundColor Yellow
+    Write-Host "   Purpose: analyze Android APKs and software through an MCP server."
+    Write-Host "   Installs to user profile and configures Codex."
     Write-Host ""
 
     Write-Host "How they work together:" -ForegroundColor White
@@ -507,6 +516,9 @@ function Select-ToolsInteractive([string]$Action = "Install") {
                 if (Read-YesNo "$Action Codebase Memory ?" $defaultYes) {
                     $selected += "CodebaseMemory"
                 }
+                if (Read-YesNo "$Action REA (Android reverse engineering) ?" $defaultYes) {
+                    $selected += "REA"
+                }
                 return $selected
             }
             "Q" { return @() }
@@ -581,6 +593,10 @@ function Uninstall-Tools([string[]]$Selected) {
                     }
                 }
                 "CodebaseMemory" { if (Test-Path -LiteralPath $CbmExe) { Remove-Item -LiteralPath $CbmExe -Force } }
+                "REA" {
+                    if (Test-Path -LiteralPath $ReaExe) { Invoke-External npm "uninstall" "--global" "--prefix" $ReaPrefix $ReaPackage }
+                    Write-Warn2 "REA MCP registrations remain in your user config; use the official REA uninstall workflow if desired."
+                }
             }
         } catch {
             Write-Fail "Cannot uninstall $tool : $($_.Exception.Message)"
@@ -1112,6 +1128,70 @@ function Install-OrUpdate-CodebaseMemory($State) {
 
     $status = if (-not $installed) { "not-installed" } elseif ($latest -and (Compare-VersionText $installed $latest)) { "up-to-date" } else { "update-available" }
     Set-ToolState $State "CodebaseMemory" $installed $latest $status $wasUpdated
+}
+
+# ===========================================================================
+# REA (user-level npm installation and Codex MCP registration)
+# ===========================================================================
+
+function Get-ReaInstalledVersion {
+    if (-not (Test-Path -LiteralPath $ReaExe)) { return $null }
+    if (-not (Test-Command "npm")) { return $null }
+    try {
+        $json = & npm list --global --prefix $ReaPrefix $ReaPackage --depth=0 --json 2>$null | Out-String
+        $obj = $json | ConvertFrom-Json
+        $dep = $obj.dependencies.PSObject.Properties[$ReaPackage]
+        if ($dep) { return Normalize-Version $dep.Value.version }
+    } catch {}
+    return $null
+}
+
+function Test-ReaNodeVersion {
+    if (-not (Test-Command "node")) { return $false }
+    $nodeVersion = (& node --version | Out-String).Trim().TrimStart('v')
+    try {
+        $v = [version]$nodeVersion
+        return (($v.Major -eq 22 -and $v -ge [version]"22.23.4") -or
+                ($v.Major -eq 24 -and $v -ge [version]"24.22.1") -or
+                ($v.Major -eq 26 -and $v -ge [version]"26.12.1"))
+    } catch { return $false }
+}
+
+function Install-OrUpdate-Rea($State) {
+    Write-Section "REA"
+    $installed = Get-ReaInstalledVersion
+    $latest = $null
+    if (Test-Command "npm") {
+        try { $latest = Normalize-Version ((& npm view $ReaPackage version 2>$null | Out-String).Trim()) } catch {}
+    }
+
+    $wasUpdated = $false
+    if (-not $Check) {
+        Ensure-Node
+        if (-not (Test-ReaNodeVersion)) {
+            throw "REA requires Node.js 22.23.4+, 24.22.1+, or 26.12.1+ in the corresponding major series."
+        }
+        if ($ForceReinstall -or -not $installed -or ($latest -and -not (Compare-VersionText $installed $latest))) {
+            New-Item -ItemType Directory -Force -Path $ReaPrefix | Out-Null
+            if ($ForceReinstall) {
+                Invoke-External npm "install" "--global" "--prefix" $ReaPrefix "--force" "$ReaPackage@latest"
+            } else {
+                Invoke-External npm "install" "--global" "--prefix" $ReaPrefix "$ReaPackage@latest"
+            }
+            $wasUpdated = $true
+            $installed = Get-ReaInstalledVersion
+            if (-not $installed) { throw "REA installation could not be verified." }
+            Write-OK "REA installed: $installed"
+        }
+        if (Test-Path -LiteralPath $ReaPrefix) { Add-UserPath $ReaPrefix }
+        if ($wasUpdated) {
+            Write-Warn2 "Review the REA Codex MCP setup plan before approval."
+            Invoke-External $ReaExe "setup" "--client" "codex"
+        }
+    }
+
+    $status = if (-not $installed) { "not-installed" } elseif ($latest -and (Compare-VersionText $installed $latest)) { "up-to-date" } else { "update-available" }
+    Set-ToolState $State "REA" $installed $latest $status $wasUpdated
 }
 
 # ===========================================================================
@@ -1718,12 +1798,16 @@ try {
     if ($selected -contains "Serena") {
         Ensure-Uv
     }
+    if ($selected -contains "REA" -and -not $Check) {
+        Ensure-Node
+    }
 
     # Tools
     if ($selected -contains "RTK")            { Install-OrUpdate-Rtk $state }
     if ($selected -contains "TokenOptimizer") { Install-OrUpdate-TokenOptimizer $state }
     if ($selected -contains "Serena")         { Install-OrUpdate-Serena $state }
     if ($selected -contains "CodebaseMemory") { Install-OrUpdate-CodebaseMemory $state }
+    if ($selected -contains "REA")            { Install-OrUpdate-Rea $state }
 
     # Configure MCP only after binaries are installed / available.
     Configure-CopilotMcp $selected
