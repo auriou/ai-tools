@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ai-tools.sh - Install, update, and diagnose local AI tools on Linux.
 #
-# Managed tools: RTK, Token Optimizer MCP (+dashboard), Serena, Codebase Memory MCP (+Graph UI).
+# Managed tools: RTK, Token Optimizer MCP (+dashboard), Serena, Codebase Memory MCP (+Graph UI), REA.
 # Portable: no sudo or system package manager required (Git is only checked).
 #
 # The script installs itself in: ~/.ai-tools/bin/ai-tools
@@ -119,7 +119,7 @@ show_help() {
 Usage: ai-tools [options] [dash [token|serena|graph|rtk]]
 
 Install, update, and diagnose local AI tools on Linux.
-Managed tools: RTK, Token Optimizer (+dashboard), Serena, Codebase Memory.
+Managed tools: RTK, Token Optimizer (+dashboard), Serena, Codebase Memory, REA.
 
 If already installed, running an external copy updates only the manager script.
 Then run 'ai-tools --all' to install or update all tools.
@@ -127,9 +127,9 @@ Then run 'ai-tools --all' to install or update all tools.
 Options:
     --check                       Diagnostics only; no persistent changes.
     --choose-tools                Reopen managed tool selection.
-    --all                         Select all four tools without prompting.
+    --all                         Select all five tools without prompting.
     --force-reinstall             Reinstall tools even if they are up to date.
-    --tools=A,B,C                 Explicit selection (RTK,TokenOptimizer,Serena,CodebaseMemory).
+    --tools=A,B,C                 Explicit selection (RTK,TokenOptimizer,Serena,CodebaseMemory,REA).
     --ui=NAME                     Launch the requested UI (RTK|TokenOptimizer|Serena|CodebaseMemory).
     --skip-dashboard-build        Do not build the Token Optimizer dashboard.
     --skip-prerequisite-install   Do not install missing prerequisites (fail if missing).
