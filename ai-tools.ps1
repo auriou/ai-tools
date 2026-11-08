@@ -9,6 +9,7 @@
     - Token Optimizer MCP + dashboard
     - Serena + dashboard
     - Codebase Memory MCP + Graph UI
+    - REA (Android APK reverse engineering MCP)
 
     The script installs itself in:
     %USERPROFILE%\.ai-tools\bin\ai-tools.ps1
@@ -58,7 +59,7 @@
     .\ai-tools.ps1 -All
         Selects all four tools without prompting.
 
-    .\ai-tools.ps1 -Tools RTK,TokenOptimizer,Serena,CodebaseMemory
+    .\ai-tools.ps1 -Tools RTK,TokenOptimizer,Serena,CodebaseMemory,REA
         Explicit selection, useful for automation.
 
     .\ai-tools.ps1 dash
