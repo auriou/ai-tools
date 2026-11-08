@@ -9,7 +9,7 @@
 # (through ~/.bashrc and ~/.zshrc when present, with ~/.profile as a fallback).
 #
 # Usage : ai-tools --help
-# Without arguments: updates, reinstallation, dashboards, or diagnostics menu.
+# Without arguments: updates, reinstallation, dashboards, diagnostics, or uninstallation menu.
 
 set -uo pipefail
 
@@ -132,7 +132,7 @@ Options:
     -h, --help                    Show this help.
 
 Commands:
-    (no arguments)    Main menu: updates, reinstallation, dashboards, diagnostics.
+    (no arguments)    Main menu: updates, reinstallation, dashboards, diagnostics, uninstallation.
     dash              Show managed dashboards and ask which one to launch.
     dash token        Launch the Token Optimizer dashboard directly.
     dash serena       Launch the Serena dashboard directly.
@@ -286,6 +286,23 @@ ensure_codex_cli_path() {
             if [ "$CHECK" = true ]; then export PATH="$(dirname "$candidate"):$PATH"; else add_user_path "$(dirname "$candidate")"; fi
             hash -r 2>/dev/null || true
             write_info "Codex CLI detected: $candidate"
+            return 0
+        fi
+    done
+
+    local platform
+    case "$(uname -m)" in
+        x86_64|amd64) platform="linux-x86_64" ;;
+        aarch64|arm64) platform="linux-aarch64" ;;
+        *) platform="" ;;
+    esac
+    for candidate in "/usr/lib/chatgpt/resources/codex" \
+        "$HOME"/.vscode/extensions/openai.chatgpt-*/bin/"$platform"/codex \
+        "$HOME"/.vscode-insiders/extensions/openai.chatgpt-*/bin/"$platform"/codex; do
+        if [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
+            export PATH="$(dirname "$candidate"):$PATH"
+            hash -r 2>/dev/null || true
+            write_info "Bundled Codex CLI detected: $candidate"
             return 0
         fi
     done
@@ -587,10 +604,12 @@ select_tools_interactive() {
                 ;;
             C)
                 local selected=()
-                read_yes_no "$action RTK ?" true && selected+=("RTK")
-                read_yes_no "$action Token Optimizer ?" true && selected+=("TokenOptimizer")
-                read_yes_no "$action Serena ?" true && selected+=("Serena")
-                read_yes_no "$action Codebase Memory ?" true && selected+=("CodebaseMemory")
+                local default_yes=true
+                [ "$action" = Uninstall ] && default_yes=false
+                read_yes_no "$action RTK ?" "$default_yes" && selected+=("RTK")
+                read_yes_no "$action Token Optimizer ?" "$default_yes" && selected+=("TokenOptimizer")
+                read_yes_no "$action Serena ?" "$default_yes" && selected+=("Serena")
+                read_yes_no "$action Codebase Memory ?" "$default_yes" && selected+=("CodebaseMemory")
                 SELECTED_TOOLS_CSV=$(IFS=,; echo "${selected[*]}")
                 return
                 ;;
@@ -641,20 +660,67 @@ read_main_action() {
         echo "  [2] Force reinstallation"
         echo "  [3] Dashboards"
         echo "  [4] Diagnostics"
+        echo "  [5] Uninstall tools"
         echo "  [Q] Quit"
     } >&2
     local choice
     while true; do
-        read -r -p "Choice [1-4/Q] " choice || return 1
+        read -r -p "Choice [1-5/Q] " choice || return 1
         case "$choice" in
             1) MAIN_ACTION=update; return 0 ;;
             2) MAIN_ACTION=reinstall; return 0 ;;
             3) MAIN_ACTION=dash; return 0 ;;
             4) MAIN_ACTION=check; return 0 ;;
+            5) MAIN_ACTION=uninstall; return 0 ;;
             q|Q) MAIN_ACTION=quit; return 0 ;;
             *) write_warn "Invalid choice." ;;
         esac
     done
+}
+
+uninstall_tools() {
+    local selected_csv="$1" tool tmp failed=false
+    write_warn "Tool data, dashboards, prerequisites, and assistant configuration will be kept."
+    write_warn "Existing MCP entries may still launch tools; npx can download Token Optimizer again."
+    read_yes_no "Uninstall $selected_csv ?" false || return 0
+    ensure_jq || return 1
+    state_init || return 1
+
+    local tools=()
+    IFS=',' read -r -a tools <<< "$selected_csv"
+    for tool in "${tools[@]}"; do
+        case "$tool" in
+            RTK) rm -f -- "$RTK_EXE" || { failed=true; continue; } ;;
+            TokenOptimizer)
+                if ! command -v npm >/dev/null 2>&1 || ! npm uninstall -g "$TOKEN_PACKAGE"; then
+                    write_fail "Cannot uninstall Token Optimizer with npm."
+                    failed=true; continue
+                fi
+                ;;
+            Serena)
+                local uv_tools
+                if ! command -v uv >/dev/null 2>&1 || ! uv_tools=$(uv tool list); then
+                    write_fail "Cannot uninstall Serena with uv."
+                    failed=true; continue
+                fi
+                if printf '%s\n' "$uv_tools" | grep -Eq '^serena-agent[[:space:]]'; then
+                    if ! uv tool uninstall "$SERENA_TOOL"; then
+                        write_fail "Cannot uninstall Serena with uv."
+                        failed=true; continue
+                    fi
+                fi
+                ;;
+            CodebaseMemory) rm -f -- "$CBM_EXE" || { failed=true; continue; } ;;
+        esac
+        tmp=$(mktemp) || return 1
+        if ! "$JQ" --arg tool "$tool" '.selectedTools = [(.selectedTools // [])[] | select(. != $tool)] | .tools |= ( . // {} | del(.[$tool]) )' "$INSTALLED_STATE_PATH" > "$tmp" || ! mv "$tmp" "$INSTALLED_STATE_PATH"; then
+            rm -f -- "$tmp"
+            write_fail "Could not update state for $tool."
+            return 1
+        fi
+        write_ok "$tool uninstalled."
+    done
+    [ "$failed" = false ]
 }
 
 # ===========================================================================
@@ -1306,6 +1372,16 @@ add_codex_mcp_server() {
         return 1
     fi
 
+    local config_path="$CODEX_HOME/config.toml" backup
+    if [ -f "$config_path" ]; then
+        backup=$(mktemp "$config_path.backup.XXXXXXXX") || return 1
+        if ! cp -- "$config_path" "$backup"; then
+            rm -f -- "$backup"
+            write_fail "Cannot back up Codex configuration: $config_path"
+            return 1
+        fi
+    fi
+
     if ! codex mcp add "$name" -- "$command" "$@"; then
         write_fail "Codex MCP server configuration failed: $name"
         return 1
@@ -1340,8 +1416,8 @@ set_codex_mcp_timeouts() {
         in_section && /^\[/ { exit }
         in_section { print }
     ' "$config_path")
-    if printf '%s\n' "$current_section" | grep -Eq "^startup_timeout_sec[[:space:]]*=[[:space:]]*$startup_timeout[[:space:]]*$" &&
-       printf '%s\n' "$current_section" | grep -Eq "^tool_timeout_sec[[:space:]]*=[[:space:]]*$tool_timeout[[:space:]]*$"; then
+     if printf '%s\n' "$current_section" | grep -Eq "^startup_timeout_sec[[:space:]]*=[[:space:]]*$startup_timeout(\\.0+)?[[:space:]]*$" &&
+         printf '%s\n' "$current_section" | grep -Eq "^tool_timeout_sec[[:space:]]*=[[:space:]]*$tool_timeout(\\.0+)?[[:space:]]*$"; then
         write_info "Codex MCP timeouts already configured: $name"
         return
     fi
@@ -1743,6 +1819,13 @@ main() {
                 select_tools_interactive Reinstall || return 1
                 TOOLS="$SELECTED_TOOLS_CSV"
                 if [ -z "$TOOLS" ]; then return 0; fi
+                ;;
+            uninstall)
+                select_tools_interactive Uninstall || return 1
+                TOOLS="$SELECTED_TOOLS_CSV"
+                if [ -z "$TOOLS" ]; then return 0; fi
+                uninstall_tools "$TOOLS"
+                return $?
                 ;;
         esac
     fi

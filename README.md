@@ -82,7 +82,7 @@ If no installed copy exists, the normal first-installation workflow runs instead
 
 ## Usage
 
-Run `ai-tools` without arguments to open the main menu: install/update, force reinstallation, dashboards, or diagnostics.
+Run `ai-tools` without arguments to open the main menu: install/update, force reinstallation, dashboards, diagnostics, or uninstall tools.
 
 | Action | Windows | Linux |
 | --- | --- | --- |
@@ -97,6 +97,8 @@ Run `ai-tools` without arguments to open the main menu: install/update, force re
 | Do not install missing prerequisites | `ai-tools -All -SkipPrerequisiteInstall` | `ai-tools --all --skip-prerequisite-install` |
 
 Valid tool identifiers are `RTK`, `TokenOptimizer`, `Serena`, and `CodebaseMemory`. Reinstalling a subset retains the other tools in the saved selection. Changing the selection does not uninstall deselected tools or remove their existing integrations.
+
+Choose **Uninstall tools** in the main menu to remove all tools or select them individually. A confirmation is required; successfully removed tools are also removed from the saved selection. Failed removals stay selected. RTK and Codebase Memory are removed only from their managed executable paths; Token Optimizer and Serena are removed using the `npm` and `uv` available on PATH. The manager, prerequisites, dashboards, tool data, PATH entries, and assistant configuration are retained. Remove unwanted MCP entries manually: an existing `npx` entry can download Token Optimizer again. Other copies of executables outside the managed paths are not removed.
 
 On Linux, `--skip-prerequisite-install` skips automatic Node.js and uv installation, but does not skip the portable jq bootstrap.
 
@@ -144,6 +146,8 @@ Other tools retain their own installation locations: Token Optimizer uses global
 For selected MCP tools, the scripts configure the portable Copilot user MCP file at `$COPILOT_HOME/mcp-config.json`, or `~/.copilot/mcp-config.json` when `COPILOT_HOME` is not set. Managed server entries are added or replaced under `mcpServers`; unrelated entries are retained. The file is backed up before writing, and files that cannot be parsed are left unchanged with a warning. The portable file is shared across Copilot profiles and compatible Copilot tools. Legacy per-profile VS Code `mcp.json` files are not modified; use VS Code's **Migrate** action to move existing servers, or the same server may remain configured in both locations.
 
 When Codex is available, missing MCP servers are added through its CLI, Token Optimizer timeouts are configured, and a managed instruction block is added to its global `AGENTS.md`. Codex paths respect `CODEX_HOME`, defaulting to `~/.codex`. Existing Codex servers are not replaced merely because their command differs.
+
+On Linux, the manager also detects the CLI bundled with the Codex desktop application or the Codex VS Code / VS Code Insiders extension when `codex` is not on PATH. Bundled CLI directories are used only for the current process, since extension updates may replace them.
 
 Copilot guidance is written to `~/.copilot/instructions/ai-tools.instructions.md`, with a backup when replacing an existing file. Serena is configured not to open its dashboard automatically, and Codebase Memory automatic indexing is enabled. RTK initializes client-specific global integration for detected Claude, Copilot, and Codex installations.
 

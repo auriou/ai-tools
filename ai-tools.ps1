@@ -38,7 +38,7 @@
 
     MAIN PARAMETERS
     .\ai-tools.ps1
-        Shows the menu: updates, reinstallation, dashboards, or diagnostics.
+        Shows the menu: updates, reinstallation, dashboards, diagnostics, or uninstallation.
 
     .\ai-tools.ps1 -ForceReinstall -All
         Reinstalls all tools, even if they are up to date.
@@ -494,16 +494,17 @@ function Select-ToolsInteractive([string]$Action = "Install") {
             "A" { return @($AllToolNames) }
             "C" {
                 $selected = @()
-                if (Read-YesNo "$Action RTK ?" $true) {
+                $defaultYes = $Action -ne "Uninstall"
+                if (Read-YesNo "$Action RTK ?" $defaultYes) {
                     $selected += "RTK"
                 }
-                if (Read-YesNo "$Action Token Optimizer ?" $true) {
+                if (Read-YesNo "$Action Token Optimizer ?" $defaultYes) {
                     $selected += "TokenOptimizer"
                 }
-                if (Read-YesNo "$Action Serena ?" $true) {
+                if (Read-YesNo "$Action Serena ?" $defaultYes) {
                     $selected += "Serena"
                 }
-                if (Read-YesNo "$Action Codebase Memory ?" $true) {
+                if (Read-YesNo "$Action Codebase Memory ?" $defaultYes) {
                     $selected += "CodebaseMemory"
                 }
                 return $selected
@@ -543,17 +544,55 @@ function Read-MainAction {
     Write-Host "  [2] Force reinstallation"
     Write-Host "  [3] Dashboards"
     Write-Host "  [4] Diagnostics"
+    Write-Host "  [5] Uninstall tools"
     Write-Host "  [Q] Quit"
     while ($true) {
-        switch ((Read-Host "Choice [1-4/Q]").Trim().ToLowerInvariant()) {
+        switch ((Read-Host "Choice [1-5/Q]").Trim().ToLowerInvariant()) {
             "1" { return "update" }
             "2" { return "reinstall" }
             "3" { return "dash" }
             "4" { return "check" }
+            "5" { return "uninstall" }
             "q" { return "quit" }
             default { Write-Warn2 "Invalid choice." }
         }
     }
+}
+
+function Uninstall-Tools([string[]]$Selected) {
+    Write-Warn2 "Tool data, dashboards, prerequisites, and assistant configuration will be kept."
+    Write-Warn2 "Existing MCP entries may still launch tools; npx can download Token Optimizer again."
+    if (-not (Read-YesNo "Uninstall $($Selected -join ', ') ?" $false)) { return }
+    $State = Load-State
+    Ensure-AiDirectories
+
+    $failed = $false
+    foreach ($tool in $Selected) {
+        try {
+            switch ($tool) {
+                "RTK" { if (Test-Path -LiteralPath $RtkExe) { Remove-Item -LiteralPath $RtkExe -Force } }
+                "TokenOptimizer" { Invoke-External npm "uninstall" "-g" $TokenPackage }
+                "Serena" {
+                    if (-not (Test-Command "uv")) { throw "uv is missing." }
+                    $installedTools = & uv tool list
+                    if ($LASTEXITCODE -ne 0) { throw "uv tool list failed ($LASTEXITCODE)." }
+                    if (($installedTools | Out-String) -match '(?m)^serena-agent\s') {
+                        Invoke-External uv "tool" "uninstall" $SerenaTool
+                    }
+                }
+                "CodebaseMemory" { if (Test-Path -LiteralPath $CbmExe) { Remove-Item -LiteralPath $CbmExe -Force } }
+            }
+        } catch {
+            Write-Fail "Cannot uninstall $tool : $($_.Exception.Message)"
+            $failed = $true
+            continue
+        }
+        $State.selectedTools = @($State.selectedTools | Where-Object { $_ -ne $tool })
+        $State.tools.Remove($tool)
+        Save-State $State
+        Write-OK "$tool uninstalled."
+    }
+    if ($failed) { throw "One or more tools could not be uninstalled." }
 }
 
 # ===========================================================================
@@ -1615,6 +1654,12 @@ try {
                 $ForceReinstall = $true
                 $Tools = @(Select-ToolsInteractive "Reinstall")
                 if ($Tools.Count -eq 0) { exit 0 }
+            }
+            "uninstall" {
+                $selected = @(Select-ToolsInteractive "Uninstall")
+                if ($selected.Count -eq 0) { exit 0 }
+                Uninstall-Tools $selected
+                exit 0
             }
         }
     }
