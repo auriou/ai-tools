@@ -63,7 +63,7 @@ After installation, open a new terminal. On Windows, fully restart VS Code, VS C
 
 ## Running a downloaded manager script
 
-The Windows and Linux scripts contain a shared manager version (currently `1.1.0`). When executed from Downloads or another path outside the installed manager, they compare this version with the user's installed copy **before** changing anything:
+The Windows and Linux scripts contain a shared manager version (currently `1.1.1`). When executed from Downloads or another path outside the installed manager, they compare this version with the user's installed copy **before** changing anything:
 
 | Installed manager | Behavior |
 | --- | --- |
@@ -151,6 +151,8 @@ On Linux, the manager also detects the CLI bundled with the Codex desktop applic
 Copilot guidance is written to `~/.copilot/instructions/ai-tools.instructions.md`, with a backup when replacing an existing file. Serena is configured not to open its dashboard automatically, and Codebase Memory automatic indexing is enabled. RTK initializes client-specific global integration for detected Claude, Copilot, and Codex installations.
 
 Windows uses the user PATH. Linux adds PATH entries to existing `~/.bashrc` and `~/.zshrc` files and to `~/.profile`.
+
+When one tool download fails (for example an HTTP 503 from the RTK release server), the manager retries that download and continues processing other selected tools. Failed tools are reported at the end; rerun the installed manager to retry them.
 
 ## Troubleshooting
 
