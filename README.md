@@ -61,25 +61,23 @@ On the first installation, choose all tools or select them individually. The scr
 
 After installation, open a new terminal. On Windows, fully restart VS Code, VS Code Insiders, and Codex so they pick up PATH changes.
 
-## Updating the manager script
+## Running a downloaded manager script
 
-Download the latest platform script, or pull this repository, then execute that file from any location, including Downloads. You do not need to copy it manually or change your terminal's working directory.
+The Windows and Linux scripts contain a shared manager version (currently `1.1.0`). When executed from Downloads or another path outside the installed manager, they compare this version with the user's installed copy **before** changing anything:
 
-If a manager script is already installed, running another copy replaces only the installed script and exits before the menu, prerequisite checks, or tool updates. The destination is `%USERPROFILE%\.ai-tools\bin\ai-tools.ps1` on Windows or `~/.ai-tools/bin/ai-tools` on Linux. Detection uses the script's full path on Windows and file identity on Linux, not just its name.
+| Installed manager | Behavior |
+| --- | --- |
+| Not installed | Ask permission to install the manager, then offer tool selection and installation. |
+| Same version | Report that ai-tools is current and stop, without reinstalling or updating tools. |
+| Older / legacy version | Ask permission to update the manager, back up the previous script, then offer the current tool list and update selected tools. |
+| Newer than the downloaded copy | Refuse to downgrade; leave everything unchanged. |
 
-The script reports the update and recommends running the installed command afterward:
+If you decline, no installation or update is performed. Existing selected tools remain in the state file. When proceeding with a new or updated manager without explicit command-line options, the selection menu includes newly supported tools such as REA; the selected tools are installed or updated afterward.
 
-```powershell
-ai-tools -All
-```
+For normal **tool-only updates** when the manager version is already current, run the installed command (`ai-tools`, `ai-tools --all` or `ai-tools -All`), not the downloaded script.
 
-```bash
-ai-tools --all
-```
+The installed manager script lives at `%USERPROFILE%\.ai-tools\bin\ai-tools.ps1` on Windows or `~/.ai-tools/bin/ai-tools` on Linux. The old script is backed up alongside it before any manager upgrade.
 
-This script-only update leaves PATH, saved tool selection, state, and MCP configuration unchanged. Even if you pass `-All` or `--all` to the external copy, it only updates the manager when an installed copy exists. Run the installed command to update tools; the all-tools option also installs any missing managed tools.
-
-If no installed copy exists, the normal first-installation workflow runs instead. Running the installed copy retains its normal behavior. Diagnostic mode (`-Check` / `--check`) never copies the script, and Bash `--help` only displays help.
 
 ## Usage
 

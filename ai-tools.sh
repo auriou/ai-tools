@@ -13,6 +13,8 @@
 
 set -uo pipefail
 
+AI_TOOLS_VERSION="1.1.0"
+
 # ===========================================================================
 # Managed locations
 # ===========================================================================
@@ -1868,13 +1870,48 @@ show_ui_commands() {
 # MAIN
 # ===========================================================================
 
+# Handle a downloaded / externally launched copy before touching tool state.
+# A matching installed version is intentionally a no-op.
+handle_external_copy() {
+    local source="${BASH_SOURCE[0]}"
+    [ -f "$source" ] || return 1
+    if [ -f "$MANAGED_SCRIPT_PATH" ] && [ "$source" -ef "$MANAGED_SCRIPT_PATH" ]; then return 1; fi
+
+    local installed_version="" action=""
+    if [ -f "$MANAGED_SCRIPT_PATH" ]; then
+        installed_version=$(sed -n 's/^AI_TOOLS_VERSION="\([0-9][0-9.]*\)"$/\1/p' "$MANAGED_SCRIPT_PATH" | head -n1)
+        if [ "$installed_version" = "$AI_TOOLS_VERSION" ]; then
+            write_ok "ai-tools $AI_TOOLS_VERSION is already installed. Nothing to do."
+            return 0
+        fi
+        if [ -n "$installed_version" ] && [ "$(printf '%s\n' "$AI_TOOLS_VERSION" "$installed_version" | sort -V | tail -n1)" = "$installed_version" ]; then
+            write_warn "Installed ai-tools $installed_version is newer than this copy ($AI_TOOLS_VERSION). No downgrade performed."
+            return 0
+        fi
+        write_info "Installed manager: ${installed_version:-legacy (unversioned)}; downloaded: $AI_TOOLS_VERSION"
+        read_yes_no "Update installed ai-tools to $AI_TOOLS_VERSION and then manage tools?" true || return 0
+        local backup="$MANAGED_SCRIPT_PATH.backup.$(date +%Y%m%d-%H%M%S)"
+        cp -- "$MANAGED_SCRIPT_PATH" "$backup" || return 2
+        write_ok "Previous manager backed up: $backup"
+        install_self true || return 2
+    else
+        read_yes_no "ai-tools is not installed. Install $AI_TOOLS_VERSION for this user?" true || return 0
+        install_self || return 2
+    fi
+
+    # Keep explicit CLI choices; otherwise offer the updated tool catalog
+    # and update selected tools (including any newly selected tools).
+    local args=("${ORIGINAL_ARGS[@]}")
+    if [ ${#args[@]} -eq 0 ]; then args=(--choose-tools); fi
+    write_info "Launching the installed manager: ${args[*]}"
+    bash "$MANAGED_SCRIPT_PATH" "${args[@]}"
+    return $?
+}
+
 main() {
-    if [ "$CHECK" != true ] && [ -f "$MANAGED_SCRIPT_PATH" ] &&
-       [ ! "${BASH_SOURCE[0]}" -ef "$MANAGED_SCRIPT_PATH" ]; then
-        install_self true || return 1
-        echo "No tools were installed or updated." >&2
-        echo "Run 'ai-tools --all' to install or update all tools." >&2
-        return 0
+    if [ "$EXTERNAL_COPY" = true ]; then
+        handle_external_copy
+        return $?
     fi
 
     if [ "$INTERACTIVE_MENU" = true ]; then
@@ -1978,6 +2015,11 @@ main() {
     fi
 }
 
+ORIGINAL_ARGS=("$@")
+EXTERNAL_COPY=false
+if [ -f "${BASH_SOURCE[0]}" ]; then
+    if [ ! -f "$MANAGED_SCRIPT_PATH" ] || [ ! "${BASH_SOURCE[0]}" -ef "$MANAGED_SCRIPT_PATH" ]; then EXTERNAL_COPY=true; fi
+fi
 parse_args "$@"
 validate_args
 main
