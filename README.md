@@ -12,6 +12,7 @@ Manage your local tools from one command, with interactive selection, version ch
 | [Token Optimizer](https://github.com/ooples/token-optimizer-mcp) | Reduce context from file reads and searches using optimized MCP tools and caching. | npm; dashboard built from its matching Git tag |
 | [Serena](https://github.com/oraios/serena) | Navigate code through symbols, definitions, and references instead of reading entire files. | `serena-agent` via uv |
 | [Codebase Memory](https://github.com/DeusData/codebase-memory-mcp) | Explore repository architecture and relationships through a code graph. | Official installer and native updater |
+| [REA](https://github.com/morluto/rea) | Analyze Android APKs and binaries via Codex MCP. | Isolated user-level npm installation |
 
 These tools address different sources of unnecessary context. Actual token savings depend on your assistant, workflow, and whether it uses the installed tools.
 
@@ -96,9 +97,9 @@ Run `ai-tools` without arguments to open the main menu: install/update, force re
 | Skip the Token Optimizer dashboard build | `ai-tools -All -SkipDashboardBuild` | `ai-tools --all --skip-dashboard-build` |
 | Do not install missing prerequisites | `ai-tools -All -SkipPrerequisiteInstall` | `ai-tools --all --skip-prerequisite-install` |
 
-Valid tool identifiers are `RTK`, `TokenOptimizer`, `Serena`, and `CodebaseMemory`. Reinstalling a subset retains the other tools in the saved selection. Changing the selection does not uninstall deselected tools or remove their existing integrations.
+Valid tool identifiers are `RTK`, `TokenOptimizer`, `Serena`, `CodebaseMemory`, and `REA`. Reinstalling a subset retains the other tools in the saved selection. Changing the selection does not uninstall deselected tools or remove their existing integrations.
 
-Choose **Uninstall tools** in the main menu to remove all tools or select them individually. A confirmation is required; successfully removed tools are also removed from the saved selection. Failed removals stay selected. RTK and Codebase Memory are removed only from their managed executable paths; Token Optimizer and Serena are removed using the `npm` and `uv` available on PATH. The manager, prerequisites, dashboards, tool data, PATH entries, and assistant configuration are retained. Remove unwanted MCP entries manually: an existing `npx` entry can download Token Optimizer again. Other copies of executables outside the managed paths are not removed.
+Choose **Uninstall tools** in the main menu to remove all tools or select them individually. A confirmation is required; successfully removed tools are also removed from the saved selection. Failed removals stay selected. RTK and Codebase Memory are removed only from their managed executable paths; Token Optimizer and Serena are removed using the `npm` and `uv` available on PATH. REA is uninstalled from its isolated npm prefix; its MCP registration is retained for explicit removal using REA’s official uninstall workflow. The manager, prerequisites, dashboards, tool data, PATH entries, and assistant configuration are retained. Remove unwanted MCP entries manually: an existing `npx` entry can download Token Optimizer again. Other copies of executables outside the managed paths are not removed.
 
 On Linux, `--skip-prerequisite-install` skips automatic Node.js and uv installation, but does not skip the portable jq bootstrap.
 
@@ -141,7 +142,7 @@ The manager stores its files under `~/.ai-tools` (`%USERPROFILE%\.ai-tools` on W
 | `apps/` | Token Optimizer dashboard and portable Node.js on Linux when needed |
 | `logs/` | Reserved log directory |
 
-Other tools retain their own installation locations: Token Optimizer uses global npm packages, Serena uses uv, and Codebase Memory uses its official installer. The state file is a record, not the source of truth: actual installed versions are checked on each run.
+Other tools retain their own installation locations: Token Optimizer uses global npm packages, Serena uses uv, Codebase Memory uses its official installer, and REA is installed to `~/.ai-tools/npm` (Linux) or `%USERPROFILE%\.ai-tools\npm` (Windows) with a dedicated npm prefix. The state file is a record, not the source of truth: actual installed versions are checked on each run.
 
 For selected MCP tools, the scripts configure the portable Copilot user MCP file at `$COPILOT_HOME/mcp-config.json`, or `~/.copilot/mcp-config.json` when `COPILOT_HOME` is not set. Managed server entries are added or replaced under `mcpServers`; unrelated entries are retained. The file is backed up before writing, and files that cannot be parsed are left unchanged with a warning. The portable file is shared across Copilot profiles and compatible Copilot tools. Legacy per-profile VS Code `mcp.json` files are not modified; use VS Code's **Migrate** action to move existing servers, or the same server may remain configured in both locations.
 
@@ -161,6 +162,8 @@ Windows uses the user PATH. Linux adds PATH entries to existing `~/.bashrc` and 
 - **An MCP configuration is skipped:** check the warning and the JSON syntax. Comments or trailing commas in JSONC may prevent parsing.
 - **A dashboard is unavailable:** install/select its tool first. For Token Optimizer, do not skip the dashboard build, and ensure Git is available. Local dashboard changes are preserved rather than overwritten by a Git update.
 - **More detail is needed:** use `ai-tools -Check -Verbose` on Windows or `ai-tools --check --verbose` on Linux for diagnostics without persistent changes.
-## Optional REA integration (Linux)
+## REA integration (Linux and Windows)
 
-To manage [REA (Reverse Engineer Anything)](https://github.com/morluto/rea) at user scope for Codex, run `bash tools/rea.sh install`. Use `bash tools/rea.sh update` to upgrade and `bash tools/rea.sh check` for diagnostics. Add `--vscode` only if you also want a separate VS Code/Copilot MCP registration. See [REA setup instructions](tools/README-rea.md). This integration is optional and does not change the four tools managed by `ai-tools --all`.
+REA is the fifth selectable tool. Install/update it from the main menu, or use `ai-tools --tools=REA` on Linux and `ai-tools -Tools REA` on Windows. It is managed independently of the other tools and installed to a user-owned npm prefix without `sudo` or changes to the normal global npm prefix. The official REA setup wizard registers the MCP server for Codex; this is shared with the Codex VS Code/Insiders extension. For GitHub Copilot’s separate VS Code MCP configuration, run `rea setup --client vscode` from the installed REA executable. See [REA setup instructions](tools/README-rea.md).
+
+The standalone Linux helper `bash tools/rea.sh install|update|check [--vscode]` remains available. Existing saved selections are preserved; run `--choose-tools` or `-ChooseTools` to opt into REA. `--all`/`-All` includes it.
