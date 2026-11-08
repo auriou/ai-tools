@@ -13,7 +13,7 @@
 
 set -uo pipefail
 
-AI_TOOLS_VERSION="1.1.0"
+AI_TOOLS_VERSION="1.1.1"
 
 # ===========================================================================
 # Managed locations
@@ -889,7 +889,7 @@ install_or_update_rtk() {
 
         local tmp; tmp=$(mktemp -d)
         write_info "Downloading RTK $latest..."
-        curl -fsSL -H "User-Agent: ai-tools-updater" -o "$tmp/$asset" "$dl_url" || { write_fail "RTK download failed."; rm -rf "$tmp"; return 1; }
+        curl --fail --silent --show-error --location --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 15 -H "User-Agent: ai-tools-updater" -o "$tmp/$asset" "$dl_url" || { write_fail "RTK download failed after retries."; rm -rf "$tmp"; return 1; }
 
         if [ -n "$cs_url" ]; then
             curl -fsSL -H "User-Agent: ai-tools-updater" -o "$tmp/checksums.txt" "$cs_url" || true
@@ -1993,11 +1993,17 @@ main() {
         case ",$selected_csv," in *,REA,*) ensure_node ;; esac
     fi
 
-    case ",$selected_csv," in *,RTK,*) install_or_update_rtk || exit 1 ;; esac
-    case ",$selected_csv," in *,TokenOptimizer,*) install_or_update_token_optimizer || exit 1 ;; esac
-    case ",$selected_csv," in *,Serena,*) install_or_update_serena || exit 1 ;; esac
-    case ",$selected_csv," in *,CodebaseMemory,*) install_or_update_codebase_memory || exit 1 ;; esac
-    case ",$selected_csv," in *,REA,*) install_or_update_rea || exit 1 ;; esac
+    # One unavailable download must not prevent unrelated tools from updating.
+    local failed_tools=()
+    case ",$selected_csv," in *,RTK,*) install_or_update_rtk || failed_tools+=("RTK") ;; esac
+    case ",$selected_csv," in *,TokenOptimizer,*) install_or_update_token_optimizer || failed_tools+=("TokenOptimizer") ;; esac
+    case ",$selected_csv," in *,Serena,*) install_or_update_serena || failed_tools+=("Serena") ;; esac
+    case ",$selected_csv," in *,CodebaseMemory,*) install_or_update_codebase_memory || failed_tools+=("CodebaseMemory") ;; esac
+    case ",$selected_csv," in *,REA,*) install_or_update_rea || failed_tools+=("REA") ;; esac
+    local failed_tool
+    for failed_tool in "${failed_tools[@]}"; do
+        state_set_tool "$failed_tool" "" "" "failed"
+    done
 
     configure_copilot_mcp "$selected_csv" || return 1
     configure_codex_integration "$selected_csv" || exit 1
@@ -2007,6 +2013,10 @@ main() {
     show_state_summary "$selected_csv"
     show_ui_commands "$selected_csv"
 
+    if [ ${#failed_tools[@]} -gt 0 ]; then
+        write_warn "Some tools failed: ${failed_tools[*]}. Other selected tools were processed."
+        return 1
+    fi
     if [ "$CHECK" != true ]; then
         write_warn "After the first installation, open a new terminal (or source ~/.bashrc / ~/.profile) to pick up PATH changes."
         write_ok "Installation / update completed."

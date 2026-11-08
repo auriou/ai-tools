@@ -112,7 +112,7 @@ param(
     [switch]$SkipPrerequisiteInstall
 )
 
-$AiToolsVersion = "1.1.0"
+$AiToolsVersion = "1.1.1"
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -727,7 +727,18 @@ function Install-OrUpdate-Rtk($State) {
 
         try {
             Write-Info "Downloading RTK $latest..."
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -Headers @{ "User-Agent"="ai-tools-rtk-updater" }
+            $downloaded = $false
+            for ($attempt = 1; $attempt -le 4; $attempt++) {
+                try {
+                    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -Headers @{ "User-Agent"="ai-tools-rtk-updater" } -ErrorAction Stop
+                    $downloaded = $true
+                    break
+                } catch {
+                    if ($attempt -eq 4) { throw }
+                    Write-Warn2 "RTK download attempt $attempt failed; retrying..."
+                    Start-Sleep -Seconds 2
+                }
+            }
             Expand-Archive -LiteralPath $zip -DestinationPath $ext -Force
 
             $candidate = Get-ChildItem $ext -Filter "rtk.exe" -Recurse | Select-Object -First 1
@@ -1844,11 +1855,22 @@ try {
     }
 
     # Tools
-    if ($selected -contains "RTK")            { Install-OrUpdate-Rtk $state }
-    if ($selected -contains "TokenOptimizer") { Install-OrUpdate-TokenOptimizer $state }
-    if ($selected -contains "Serena")         { Install-OrUpdate-Serena $state }
-    if ($selected -contains "CodebaseMemory") { Install-OrUpdate-CodebaseMemory $state }
-    if ($selected -contains "REA")            { Install-OrUpdate-Rea $state }
+    $failedTools = @()
+    foreach ($tool in $selected) {
+        try {
+            switch ($tool) {
+                "RTK"            { Install-OrUpdate-Rtk $state }
+                "TokenOptimizer" { Install-OrUpdate-TokenOptimizer $state }
+                "Serena"         { Install-OrUpdate-Serena $state }
+                "CodebaseMemory" { Install-OrUpdate-CodebaseMemory $state }
+                "REA"            { Install-OrUpdate-Rea $state }
+            }
+        } catch {
+            Write-Fail "$tool failed: $($_.Exception.Message)"
+            $failedTools += $tool
+            Set-ToolState $state $tool $null $null "failed"
+        }
+    }
 
     # Configure MCP only after binaries are installed / available.
     Configure-CopilotMcp $selected
@@ -1859,6 +1881,9 @@ try {
     Show-StateSummary $state $selected
     Show-UiCommands $selected
 
+    if ($failedTools.Count -gt 0) {
+        throw "Some tools failed: $($failedTools -join ', '). Other selected tools were processed."
+    }
     if (-not $Check) {
         Write-Warn2 "After the first installation, fully close and restart VS Code, VS Code Insiders, and Codex to pick up PATH changes."
         Write-OK "Installation / update completed."
