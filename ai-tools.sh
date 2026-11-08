@@ -13,7 +13,7 @@
 
 set -uo pipefail
 
-AI_TOOLS_VERSION="1.1.2"
+AI_TOOLS_VERSION="1.1.3"
 
 # ===========================================================================
 # Managed locations
@@ -1317,10 +1317,8 @@ install_or_update_rea() {
             write_ok "REA installed: $installed"
         fi
         add_user_path "$REA_PREFIX/bin"
-        if [ "$was_updated" = true ]; then
-            write_warn "Review REA's Codex MCP setup plan before approving."
-            "$REA_EXE" setup --client codex || return 1
-        fi
+        write_warn "Review REA's Codex MCP setup plan before approving."
+        "$REA_EXE" setup --client codex || return 1
     fi
     local status="not-installed"
     if [ -n "$installed" ]; then
@@ -1355,6 +1353,7 @@ set_mcp_servers_in_file() {
             config=$(cat "$path")
         else
             write_warn "Cannot parse JSON/JSONC; file left unchanged: $path"
+            case ",$selected_csv," in *,REA,*) return 1 ;; esac
             return
         fi
     fi
@@ -1373,6 +1372,21 @@ set_mcp_servers_in_file() {
 
     case ",$selected_csv," in *,CodebaseMemory,*)
         config=$(printf '%s' "$config" | "$JQ" '.mcpServers = (((.mcpServers // {}) | del(."codebase-memory-mcp")) + {"codebase-memory": {type:"stdio", command:"codebase-memory-mcp", args:[]}})')
+        changed=true
+    ;; esac
+
+    case ",$selected_csv," in *,REA,*)
+        if [ "$CHECK" = true ]; then
+            if ! printf '%s' "$config" | "$JQ" -e --arg command "$REA_EXE" '.mcpServers.rea | .type == "stdio" and .command == $command and .args == ["mcp"]' >/dev/null; then
+                write_warn "REA MCP registration missing or stale: $path"
+                return 1
+            fi
+        elif [ ! -x "$REA_EXE" ]; then
+            write_fail "REA executable missing; MCP registration not written: $REA_EXE"
+            return 1
+        else
+            config=$(printf '%s' "$config" | "$JQ" --arg command "$REA_EXE" '.mcpServers = ((.mcpServers // {}) + {"rea": {type:"stdio", command:$command, args:["mcp"]}})') || return 1
+        fi
         changed=true
     ;; esac
 
@@ -1400,7 +1414,7 @@ configure_copilot_mcp() {
     write_section "Copilot global MCP configuration"
 
     local mcp_relevant=false
-    case ",$selected_csv," in *,TokenOptimizer,*|*,Serena,*|*,CodebaseMemory,*) mcp_relevant=true ;; esac
+    case ",$selected_csv," in *,TokenOptimizer,*|*,Serena,*|*,CodebaseMemory,*|*,REA,*) mcp_relevant=true ;; esac
     if [ "$mcp_relevant" != true ]; then
         write_info "No MCP tools selected."
         return

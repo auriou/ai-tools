@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# REA user-level installation, update and diagnostics for Codex and optional VS Code MCP.
+# REA user-level installation, update and diagnostics for Codex and optional Copilot MCP.
 set -euo pipefail
 
 MODE="${1:-}"
@@ -40,9 +40,13 @@ check_requirements() {
 
 check_install() {
   if [ ! -x "$REA_BIN" ]; then echo "REA not installed at $REA_BIN"; return 1; fi
-  "$REA_BIN" --version
-  "$REA_BIN" doctor --client codex
-  if [ "$VSCODE" = true ]; then "$REA_BIN" doctor --client vscode; fi
+  local failed=0
+  "$REA_BIN" --version || failed=1
+  "$REA_BIN" doctor --client codex || failed=1
+  if [ "$VSCODE" = true ]; then
+    "$REA_BIN" doctor --client copilot_cli || failed=1
+    "$REA_BIN" doctor --client vscode || failed=1
+  fi
   for dep in java jadx adb apktool; do
     if command -v "$dep" >/dev/null 2>&1; then
       echo "[OK] $dep: $(command -v "$dep")"
@@ -50,6 +54,7 @@ check_install() {
       echo "[OPTIONAL] $dep missing (Android analysis capabilities may be limited)"
     fi
   done
+  return "$failed"
 }
 
 if [ "$MODE" = check ]; then
@@ -77,8 +82,8 @@ fi
 echo "Review REA's proposed Codex MCP configuration changes before approving."
 "$REA_BIN" setup --client codex
 if [ "$VSCODE" = true ]; then
-  echo "Review REA's proposed VS Code MCP configuration changes before approving."
-  "$REA_BIN" setup --client vscode
+  echo "Review REA's proposed Copilot SDK and VS Code MCP configuration changes before approving."
+  "$REA_BIN" setup --client copilot_cli --client vscode
 fi
 echo "REA: $REA_BIN"
 echo "Restart Codex / VS Code Insiders to load the MCP server."

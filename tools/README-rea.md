@@ -1,6 +1,6 @@
-# REA (Reverse Engineer Anything) for Codex
+# REA (Reverse Engineer Anything) for Codex and Copilot
 
-[REA](https://github.com/morluto/rea) is an optional Android APK reverse-engineering MCP server. This integration is **Linux-only** for now. It does not modify Android projects or the existing four-tool `ai-tools` selection.
+[REA](https://github.com/morluto/rea) is an optional reverse-engineering MCP server. The main `ai-tools` manager supports Linux and Windows and includes REA as its fifth selectable tool. The standalone helper below is Linux-only. Neither integration modifies Android projects.
 
 ## User-level setup
 
@@ -12,13 +12,15 @@ bash tools/rea.sh install
 
 REA is installed using npm into `~/.ai-tools/npm`, **without sudo** and without modifying the repository's dependencies or the user's npm global prefix. The official `rea setup` wizard will ask for approval before registering the MCP server in the **user-level Codex configuration** (normally `~/.codex/config.toml`). Codex CLI and the Codex VS Code extension share that configuration.
 
-To configure the separate **VS Code MCP integration** as well (useful for GitHub Copilot Agent mode):
+To configure **Copilot SDK** (including its chat inside VS Code Insiders) and the separate **VS Code MCP integration** as well:
 
 ```bash
 bash tools/rea.sh install --vscode
 ```
 
-The `--vscode` flag is **not required** if you only use Codex within VS Code / Insiders. Review setup changes before approving, especially if REA was previously registered through an npm cache or another installation.
+The helper's `--vscode` flag runs official setup for both `copilot_cli` and `vscode`: installing the skill or configuring Codex alone does not connect REA to Copilot SDK. The `vscode` client may target the stable VS Code profile; it does not establish a connection in Insiders. Verify REA in the active chat's MCP server list after restarting. Review setup changes before approving, especially if REA was previously registered through an npm cache or another installation.
+
+The main manager (`ai-tools --tools=REA` on Linux or `ai-tools -Tools REA` on Windows) automatically registers REA in the detected portable Copilot user configuration (`$COPILOT_HOME/mcp-config.json`, defaulting to `~/.copilot/mcp-config.json`). It uses the stable executable in the dedicated npm prefix and preserves unrelated server entries. Version 1.1.3 also repairs registrations when the package is already current. Legacy VS Code profile configurations are not modified by the main manager.
 
 ## Update and diagnostics
 
@@ -27,7 +29,7 @@ bash tools/rea.sh update
 bash tools/rea.sh check
 ```
 
-Append `--vscode` to update/check the optional VS Code integration. The update command refreshes the global package within the same user prefix and reruns official setup to keep registrations aligned. Both setup and updates can change user-level MCP configuration, but do not modify project files. Check mode only inspects the installation.
+Append `--vscode` to update/check the optional Copilot SDK and VS Code integrations. The helper checks every selected client even when one diagnostic fails and returns a failure if any selected client fails. The update command refreshes the global package within the same user prefix and reruns official setup to keep registrations aligned. Both setup and updates can change user-level MCP configuration, but do not modify project files. Check mode only inspects the installation.
 
 To run `rea` directly, add this directory to your shell PATH:
 
@@ -47,4 +49,4 @@ You can add that line to `~/.bashrc` or `~/.zshrc` if desired. The script itself
 - This integration does not automatically uninstall REA or remove its MCP registrations. Use the official `rea uninstall` workflow after reviewing what it will remove.
 - Only analyze applications you own or are authorized to inspect.
 
-This is a standalone optional integration: the existing `ai-tools --all`, saved selection, and Windows PowerShell manager are unchanged.
+Existing saved selections are preserved; choose REA explicitly or use `--all` / `-All` to include it. MCP registration verifies configuration, not the live chat connection or availability of every analysis engine.

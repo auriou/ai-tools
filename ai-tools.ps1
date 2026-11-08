@@ -112,7 +112,7 @@ param(
     [switch]$SkipPrerequisiteInstall
 )
 
-$AiToolsVersion = "1.1.2"
+$AiToolsVersion = "1.1.3"
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -1144,7 +1144,7 @@ function Install-OrUpdate-CodebaseMemory($State) {
 }
 
 # ===========================================================================
-# REA (user-level npm installation and Codex MCP registration)
+# REA (user-level npm installation and Copilot / Codex MCP registration)
 # ===========================================================================
 
 function Get-ReaInstalledVersion {
@@ -1197,10 +1197,8 @@ function Install-OrUpdate-Rea($State) {
             Write-OK "REA installed: $installed"
         }
         if (Test-Path -LiteralPath $ReaPrefix) { Add-UserPath $ReaPrefix }
-        if ($wasUpdated) {
-            Write-Warn2 "Review the REA Codex MCP setup plan before approval."
-            Invoke-External $ReaExe "setup" "--client" "codex"
-        }
+        Write-Warn2 "Review the REA Codex MCP setup plan before approval."
+        Invoke-External $ReaExe "setup" "--client" "codex"
     }
 
     $status = if (-not $installed) { "not-installed" } elseif ($latest -and (Compare-VersionText $installed $latest)) { "up-to-date" } else { "update-available" }
@@ -1232,6 +1230,10 @@ function Move-McpServerEntry([object]$Servers,[string]$OldName,[string]$NewName)
 
 function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
     $dir = Split-Path $Path -Parent
+    $reaSelected = $Selected -contains "REA"
+    if ($reaSelected -and -not $Check -and -not (Test-Path -LiteralPath $ReaExe -PathType Leaf)) {
+        throw "REA executable not found: $ReaExe"
+    }
 
     if (Test-Path $Path) {
         $raw = Get-Content $Path -Raw
@@ -1239,14 +1241,32 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
             $config = [pscustomobject]@{}
         } else {
             try {
-                $config = $raw | ConvertFrom-Json
+                $config = $raw | ConvertFrom-Json -ErrorAction Stop
             } catch {
+                if ($reaSelected) { throw "Cannot parse REA MCP configuration; file left unchanged: $Path" }
                 Write-Warn2 "Cannot parse JSON/JSONC; file left unchanged: $Path"
                 return
             }
         }
     } else {
         $config = [pscustomobject]@{}
+    }
+
+    if ($reaSelected) {
+        if ($null -eq $config -or $config -isnot [pscustomobject] -or
+            ($config.PSObject.Properties["mcpServers"] -and $config.mcpServers -isnot [pscustomobject])) {
+            throw "Invalid REA MCP configuration; file left unchanged: $Path"
+        }
+        if ($Check) {
+            $entry = if ($config.PSObject.Properties["mcpServers"]) { $config.mcpServers.PSObject.Properties["rea"] } else { $null }
+            if (-not $entry -or $entry.Value.type -cne "stdio" -or
+                $entry.Value.command -cne $ReaExe -or $entry.Value.args -isnot [array] -or
+                $entry.Value.args.Count -ne 1 -or $entry.Value.args[0] -cne "mcp") {
+                throw "REA MCP entry missing or stale: $Path"
+            }
+            Write-Info "REA MCP configuration verified: $Path"
+            return
+        }
     }
 
     if (-not $config.PSObject.Properties["mcpServers"]) {
@@ -1283,6 +1303,16 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
             args    = @()
         }
         Set-McpServerEntry $config.mcpServers "codebase-memory" $value
+        $changed = $true
+    }
+
+    if ($Selected -contains "REA") {
+        $value = [pscustomobject]@{
+            type    = "stdio"
+            command = $ReaExe
+            args    = @("mcp")
+        }
+        Set-McpServerEntry $config.mcpServers "rea" $value
         $changed = $true
     }
 
@@ -1327,7 +1357,7 @@ function Get-CopilotMcpTargets {
 function Configure-CopilotMcp([string[]]$Selected) {
     Write-Section "Copilot global MCP configuration"
 
-    $mcpTools = @($Selected | Where-Object { $_ -in @("TokenOptimizer","Serena","CodebaseMemory") })
+    $mcpTools = @($Selected | Where-Object { $_ -in @("TokenOptimizer","Serena","CodebaseMemory","REA") })
     if ($mcpTools.Count -eq 0) {
         Write-Info "No MCP tools selected."
         return
