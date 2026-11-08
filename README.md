@@ -161,3 +161,6 @@ Windows uses the user PATH. Linux adds PATH entries to existing `~/.bashrc` and 
 - **An MCP configuration is skipped:** check the warning and the JSON syntax. Comments or trailing commas in JSONC may prevent parsing.
 - **A dashboard is unavailable:** install/select its tool first. For Token Optimizer, do not skip the dashboard build, and ensure Git is available. Local dashboard changes are preserved rather than overwritten by a Git update.
 - **More detail is needed:** use `ai-tools -Check -Verbose` on Windows or `ai-tools --check --verbose` on Linux for diagnostics without persistent changes.
+## Optional REA integration (Linux)
+
+To manage [REA (Reverse Engineer Anything)](https://github.com/morluto/rea) at user scope for Codex, run `bash tools/rea.sh install`. Use `bash tools/rea.sh update` to upgrade and `bash tools/rea.sh check` for diagnostics. Add `--vscode` only if you also want a separate VS Code/Copilot MCP registration. See [REA setup instructions](tools/README-rea.md). This integration is optional and does not change the four tools managed by `ai-tools --all`.
