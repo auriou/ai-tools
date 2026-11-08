@@ -54,6 +54,11 @@ CBM_EXE="$CBM_INSTALL_DIR/codebase-memory-mcp"
 CBM_INSTALLER_URL="https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh"
 CBM_API_LATEST="https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest"
 
+# REA: isolated user-owned npm prefix, shared with tools/rea.sh
+REA_PREFIX="$AI_ROOT/npm"
+REA_EXE="$REA_PREFIX/bin/rea"
+REA_PACKAGE="rea-agents"
+
 # Copilot global user instructions
 COPILOT_INSTRUCTIONS_DIR="$HOME/.copilot/instructions"
 AI_INSTRUCTION_FILE="$COPILOT_INSTRUCTIONS_DIR/ai-tools.instructions.md"
@@ -64,7 +69,7 @@ COPILOT_MCP_CONFIG_PATH="$COPILOT_CONFIG_HOME/mcp-config.json"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 CODEX_AGENTS_FILE="$CODEX_HOME/AGENTS.md"
 
-ALL_TOOL_NAMES=(RTK TokenOptimizer Serena CodebaseMemory)
+ALL_TOOL_NAMES=(RTK TokenOptimizer Serena CodebaseMemory REA)
 
 # ===========================================================================
 # Options / runtime state
@@ -204,7 +209,7 @@ validate_args() {
         IFS=','
         for t in $TOOLS; do
             case "$t" in
-                RTK|TokenOptimizer|Serena|CodebaseMemory) : ;;
+                RTK|TokenOptimizer|Serena|CodebaseMemory|REA) : ;;
                 *) IFS="$saved_ifs"; write_fail "Invalid tool in --tools: $t"; exit 1 ;;
             esac
         done
@@ -556,6 +561,10 @@ show_tool_descriptions() {
         echo "   Includes a local Graph UI."
         echo "   In short: 'understand the whole repository'."
         echo ""
+        echo -e "${YELLOW}5. REA${NC}"
+        echo "   Purpose: analyze APKs and other software through an MCP server."
+        echo "   Uses a user-level npm installation and configures Codex."
+        echo ""
         echo "How they work together:"
         echo "   RTK -> terminal | Token Optimizer -> context | Serena -> symbols | Codebase Memory -> architecture"
     } >&2
@@ -610,6 +619,7 @@ select_tools_interactive() {
                 read_yes_no "$action Token Optimizer ?" "$default_yes" && selected+=("TokenOptimizer")
                 read_yes_no "$action Serena ?" "$default_yes" && selected+=("Serena")
                 read_yes_no "$action Codebase Memory ?" "$default_yes" && selected+=("CodebaseMemory")
+                read_yes_no "$action REA (Android reverse engineering) ?" "$default_yes" && selected+=("REA")
                 SELECTED_TOOLS_CSV=$(IFS=,; echo "${selected[*]}")
                 return
                 ;;
@@ -711,6 +721,12 @@ uninstall_tools() {
                 fi
                 ;;
             CodebaseMemory) rm -f -- "$CBM_EXE" || { failed=true; continue; } ;;
+            REA)
+                if [ -x "$REA_EXE" ] && ! npm uninstall --global --prefix "$REA_PREFIX" "$REA_PACKAGE"; then
+                    write_fail "Cannot uninstall REA."; failed=true; continue
+                fi
+                write_warn "REA MCP registrations remain in user configuration; remove them with the official REA uninstall workflow if desired."
+                ;;
         esac
         tmp=$(mktemp) || return 1
         if ! "$JQ" --arg tool "$tool" '.selectedTools = [(.selectedTools // [])[] | select(. != $tool)] | .tools |= ( . // {} | del(.[$tool]) )' "$INSTALLED_STATE_PATH" > "$tmp" || ! mv "$tmp" "$INSTALLED_STATE_PATH"; then
@@ -1260,6 +1276,59 @@ install_or_update_codebase_memory() {
         if [ -n "$latest" ] && compare_version_text "$installed" "$latest"; then status="up-to-date"; else status="update-available"; fi
     fi
     state_set_tool "CodebaseMemory" "$installed" "$latest" "$status" "$was_updated"
+}
+
+# ===========================================================================
+# REA (Android APK reverse engineering)
+# ===========================================================================
+
+get_rea_installed_version() {
+    [ -x "$REA_EXE" ] || return 0
+    [ -x "$(command -v node 2>/dev/null)" ] || return 0
+    local json
+    json=$(npm list --global --prefix "$REA_PREFIX" "$REA_PACKAGE" --depth=0 --json 2>/dev/null) || return 0
+    printf '%s' "$json" | "$JQ" -r '.dependencies["rea-agents"].version // empty' 2>/dev/null
+}
+
+install_or_update_rea() {
+    write_section "REA"
+    local installed latest was_updated=false
+    installed=$(get_rea_installed_version)
+    latest=""
+    if command -v npm >/dev/null 2>&1; then
+        latest=$(npm view "$REA_PACKAGE" version 2>/dev/null | tr -d '\r') || true
+    fi
+    if [ "$CHECK" != true ]; then
+        ensure_node
+        if ! node -e 'const [a,b,c]=process.versions.node.split(".").map(Number); process.exit(((a===22&&(b>23||(b===23&&c>=4)))||(a===24&&(b>22||(b===22&&c>=1)))||(a===26&&(b>12||(b===12&&c>=1))))?0:1)' ; then
+            write_fail "Node.js version unsupported by REA: $(node --version)"
+            return 1
+        fi
+        if [ "$FORCE_REINSTALL" = true ] || [ -z "$installed" ] || { [ -n "$latest" ] && ! compare_version_text "$installed" "$latest"; }; then
+            mkdir -p "$REA_PREFIX"
+            local flags=(install --global --prefix "$REA_PREFIX")
+            [ "$FORCE_REINSTALL" = true ] && flags+=(--force)
+            npm "${flags[@]}" "${REA_PACKAGE}@latest" || return 1
+            was_updated=true
+            installed=$(get_rea_installed_version)
+            [ -n "$installed" ] || { write_fail "REA was not installed correctly."; return 1; }
+            write_ok "REA installed: $installed"
+        fi
+        add_user_path "$REA_PREFIX/bin"
+        if [ "$was_updated" = true ]; then
+            write_warn "Review REA's Codex MCP setup plan before approving."
+            "$REA_EXE" setup --client codex || return 1
+        fi
+    fi
+    local status="not-installed"
+    if [ -n "$installed" ]; then
+        if [ -n "$latest" ] && compare_version_text "$installed" "$latest"; then
+            status="up-to-date"
+        else
+            status="update-available"
+        fi
+    fi
+    state_set_tool "REA" "$installed" "$latest" "$status" "$was_updated"
 }
 
 # ===========================================================================
@@ -1883,11 +1952,15 @@ main() {
         [ "$SKIP_DASHBOARD_BUILD" = true ] || ensure_git
     ;; esac
     case ",$selected_csv," in *,Serena,*) ensure_uv ;; esac
+    if [ "$CHECK" != true ]; then
+        case ",$selected_csv," in *,REA,*) ensure_node ;; esac
+    fi
 
     case ",$selected_csv," in *,RTK,*) install_or_update_rtk || exit 1 ;; esac
     case ",$selected_csv," in *,TokenOptimizer,*) install_or_update_token_optimizer || exit 1 ;; esac
     case ",$selected_csv," in *,Serena,*) install_or_update_serena || exit 1 ;; esac
     case ",$selected_csv," in *,CodebaseMemory,*) install_or_update_codebase_memory || exit 1 ;; esac
+    case ",$selected_csv," in *,REA,*) install_or_update_rea || exit 1 ;; esac
 
     configure_copilot_mcp "$selected_csv" || return 1
     configure_codex_integration "$selected_csv" || exit 1
