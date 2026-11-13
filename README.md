@@ -1,5 +1,7 @@
 # ai-tools
 
+Installer version: **1.1.4**.
+
 Scripts to install, update, and diagnose token optimization tools for AI coding assistants on Windows and Linux.
 
 Manage your local tools from one command, with interactive selection, version checks, MCP configuration, and dashboard shortcuts.
@@ -98,9 +100,27 @@ Run `ai-tools` without arguments to open the main menu: install/update, force re
 
 Valid tool identifiers are `RTK`, `TokenOptimizer`, `Serena`, and `CodebaseMemory`. Reinstalling a subset retains the other tools in the saved selection. Changing the selection does not uninstall deselected tools or remove their existing integrations.
 
-On Linux, `--skip-prerequisite-install` skips automatic Node.js and uv installation, but does not skip the portable jq bootstrap.
+Installation state (selection, versions, and last successful run) is saved only after all selected tools and integrations complete successfully. A failed installation exits with an error and can be retried with the installed command, including the force-reinstall options above; an installed package version does not prevent retrying a failed dashboard build. The Token Optimizer dashboard records its Git commit only after both `npm ci` and `npm run build` succeed. Missing build records (including older installations) trigger a rebuild on the next update. Explicitly skipping the dashboard build remains supported.
+
+On Linux, `--skip-prerequisite-install` skips automatic Node.js, uv, and compatible Python installation, but does not skip the portable jq bootstrap.
 
 Diagnostics query installed tools and online version sources, but do not install/update tools or persist configuration/state changes. On Linux, jq must already be available for diagnostics. Diagnostic mode cannot be combined with force reinstallation or dashboard launch.
+
+### Automatic prerequisite checks
+
+Before installing or updating any selected tool, the manager resolves the target versions once and checks:
+
+- **Token Optimizer:** Node/npm requirements from the published npm metadata, plus dependency engine requirements using npm's strict, script-free dry run. Unless the dashboard is skipped, a second dry run checks the matching Git tag's lockfile, including development dependencies.
+- **Serena:** the target release's `requires_python` from PyPI. uv finds a compatible interpreter, or installs one if prerequisite installation is allowed. Python 3.13 is no longer hardcoded.
+- **RTK / Codebase Memory:** availability of a release archive for the OS and architecture. Linux uses musl RTK archives and portable Codebase Memory archives.
+
+The preflight begins by displaying the prerequisites for all selected tools, their published version ranges, and installation/update commands for the current platform. This includes Node.js/npm, Git when building the dashboard, and uv/Python for Serena. This list describes requirements, not a claim that every prerequisite is missing: already compatible prerequisites do not need reinstalling. The suggested latest LTS commands are only appropriate when that release satisfies the displayed Node.js range. After a manual installation or update, reopen the terminal and retry the same command.
+
+An incompatible existing Node/npm installation stops the run with required and detected versions; update it and retry. Force reinstallation does not bypass these checks. Missing prerequisites may still be bootstrapped before the checks finish, but no selected tool is installed until all checks pass. npm and uv may populate their caches.
+
+Installations use the checked target versions, not a second `latest` lookup. Codebase Memory updates use its version-specific official installer instead of the native updater, so a newer release appearing during the run cannot change the target.
+
+These checks do not compile native dependencies or execute installation scripts. Missing compilers, system libraries, and other undeclared runtime requirements can still cause an installation to fail; failed runs never confirm successful installation state. Diagnostic mode retains its version-reporting behavior and does not run installation simulations.
 
 To see script help before installing:
 
@@ -136,6 +156,7 @@ The manager stores its files under `~/.ai-tools` (`%USERPROFILE%\.ai-tools` on W
 | --- | --- |
 | `bin/` | Installed manager command, RTK, and portable jq on Linux when needed |
 | `state/installed.json` | Selected tools, version checks, and update history |
+| `state/token-optimizer-dashboard-build.txt` | Git commit of the last successful dashboard build |
 | `apps/` | Token Optimizer dashboard and portable Node.js on Linux when needed |
 | `logs/` | Reserved log directory |
 

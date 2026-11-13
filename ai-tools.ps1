@@ -111,6 +111,8 @@ param(
     [switch]$SkipPrerequisiteInstall
 )
 
+$AiToolsVersion = "1.1.4"
+
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
@@ -138,6 +140,7 @@ $RtkApiLatest  = "https://api.github.com/repos/$RtkOwner/$RtkRepo/releases/lates
 $TokenPackage       = "@ooples/token-optimizer-mcp"
 $TokenDashboardRepo = "https://github.com/ooples/token-optimizer-mcp.git"
 $TokenDashboardDir  = Join-Path $AppsDir "token-optimizer-dashboard"
+$TokenDashboardBuildPath = Join-Path $StateDir "token-optimizer-dashboard-build.txt"
 
 # Serena
 $SerenaTool   = "serena-agent"
@@ -161,6 +164,8 @@ $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USER
 $CodexAgentsFile = Join-Path $CodexHome "AGENTS.md"
 
 $AllToolNames = @("RTK","TokenOptimizer","Serena","CodebaseMemory")
+$InstallPlan = @{}
+$SerenaPython = $null
 
 # ===========================================================================
 # Output
@@ -438,9 +443,9 @@ function Install-Self([switch]$UpdateOnly) {
         if ($sourceFull -ine $destFull) {
             Copy-Item -LiteralPath $sourceFull -Destination $ManagedScriptPath -Force
             if ($UpdateOnly) {
-                Write-OK "Manager script updated: $ManagedScriptPath"
+                Write-OK "Manager script updated to ai-tools ${AiToolsVersion}: $ManagedScriptPath"
             } else {
-                Write-OK "Script installed: $ManagedScriptPath"
+                Write-OK "ai-tools $AiToolsVersion installed: $ManagedScriptPath"
             }
         }
     }
@@ -629,6 +634,148 @@ function Ensure-Uv {
 }
 
 # ===========================================================================
+# Install preflight
+# ===========================================================================
+
+function Get-InstallArchitecture {
+    switch ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+        "X64"   { return "amd64" }
+        "Arm64" { return "arm64" }
+        default { throw "Unsupported Windows architecture: $([Runtime.InteropServices.RuntimeInformation]::OSArchitecture)" }
+    }
+}
+
+function Assert-ReleaseAsset($Release,[string]$Name) {
+    if (-not $Release.tag_name -or -not ($Release.assets | Where-Object { $_.name -eq $Name -and $_.browser_download_url })) {
+        throw "Release $($Release.tag_name) has no asset for this platform: $Name"
+    }
+}
+
+function Initialize-InstallPlan([string[]]$Selected) {
+    $script:InstallPlan = @{}
+    if ($Selected -contains "RTK") {
+        $arch = Get-InstallArchitecture
+        $target = if ($arch -eq "amd64") { "x86_64" } else { "aarch64" }
+        $script:RtkAssetName = "rtk-$target-pc-windows-msvc.zip"
+        $release = Get-GitHubLatestRelease $RtkApiLatest
+        Assert-ReleaseAsset $release $RtkAssetName
+        $script:InstallPlan.RTK = $release
+    }
+    if ($Selected -contains "TokenOptimizer") {
+        $package = Invoke-RestMethod -Uri "https://registry.npmjs.org/$([uri]::EscapeDataString($TokenPackage))/latest"
+        if (-not $package.version) { throw "Cannot determine the Token Optimizer target version." }
+        $script:InstallPlan.TokenOptimizer = $package
+    }
+    if ($Selected -contains "Serena") {
+        $package = Invoke-RestMethod -Uri $SerenaPypi
+        if (-not $package.info.version -or -not $package.info.requires_python) {
+            throw "Serena metadata is missing its version or Python requirements."
+        }
+        $script:InstallPlan.Serena = $package.info
+    }
+    if ($Selected -contains "CodebaseMemory") {
+        $arch = Get-InstallArchitecture
+        $release = Get-GitHubLatestRelease $CbmApiLatest
+        Assert-ReleaseAsset $release "codebase-memory-mcp-windows-$arch.zip"
+        Assert-ReleaseAsset $release "checksums.txt"
+        $script:InstallPlan.CodebaseMemory = $release
+    }
+}
+
+function Find-CompatiblePython([string]$Requires) {
+    # Windows PowerShell promotes redirected native stderr to an error under Stop.
+    $ErrorActionPreference = "Continue"
+    $python = (& uv python find --no-project --no-python-downloads $Requires 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0 -and $python) { return $python }
+    return $null
+}
+
+function Show-RequiredPrerequisites([string[]]$Selected) {
+    Write-Section "Prerequisites to install / update if missing or incompatible" -Always
+    if ($Selected -contains "TokenOptimizer") {
+        $package = $InstallPlan.TokenOptimizer
+        $nodeRequires = if ($package.engines.node) { $package.engines.node } else { "not declared by the package" }
+        $npmRequires = if ($package.engines.npm) { $package.engines.npm } else { "not declared by the package" }
+        Write-Host "Token Optimizer $($package.version):"
+        Write-Host "  Node.js: $nodeRequires"
+        Write-Host "  npm: $npmRequires (npx must also be available)"
+        Write-Host "  Install a matching Node.js release (includes npm/npx): https://nodejs.org/en/download"
+        Write-Host "  If the current Node.js LTS satisfies the required range:"
+        Write-Host "    Install: winget install -e --id OpenJS.NodeJS.LTS"
+        Write-Host "    Update:  winget upgrade -e --id OpenJS.NodeJS.LTS"
+        if ($package.engines.npm) {
+            Write-Host "  If only npm needs updating, after installing compatible Node.js:"
+            Write-Host "    npm install --global `"npm@$($package.engines.npm)`""
+        }
+        if (-not $SkipDashboardBuild) {
+            Write-Host "  Git is required for the dashboard:"
+            Write-Host "    winget install -e --id Git.Git"
+        }
+    }
+    if ($Selected -contains "Serena") {
+        Write-Host "Serena $($InstallPlan.Serena.version):"
+        Write-Host "  uv: winget install -e --id astral-sh.uv"
+        Write-Host "  Python: $($InstallPlan.Serena.requires_python)"
+        Write-Host "    uv python install `"$($InstallPlan.Serena.requires_python)`""
+    }
+    if ($Selected -contains "RTK" -or $Selected -contains "CodebaseMemory") {
+        Write-Host "RTK / Codebase Memory use prebuilt binaries; no Rust or Go compiler is required."
+    }
+    Write-Host "After manual installation, reopen your terminal and rerun the same ai-tools command."
+}
+
+function Test-InstallPrerequisites([string[]]$Selected) {
+    Show-RequiredPrerequisites $Selected
+    Write-Section "Prerequisite checks" -Always
+    if ($Selected -contains "TokenOptimizer") {
+        Ensure-Node
+        if (-not (Test-Command "node") -or -not (Test-Command "npm") -or -not (Test-Command "npx")) {
+            throw "Node/npm/npx are missing after prerequisite setup."
+        }
+        $package = $InstallPlan.TokenOptimizer
+        $nodeRequires = if ($package.engines.node) { $package.engines.node } else { "not declared" }
+        $npmRequires = if ($package.engines.npm) { $package.engines.npm } else { "not declared" }
+        Write-Host "Token Optimizer $($package.version) requires Node $nodeRequires, npm $npmRequires."
+        Write-Host "Detected: Node $(& node --version), npm $(& npm --version)."
+        try {
+            Invoke-External npm "install" "--global" "--dry-run" "--ignore-scripts" "--engine-strict" "--force=false" "$TokenPackage@$($package.version)" | Out-Null
+        } catch {
+            throw "Token Optimizer prerequisite check failed. Check the Node/npm requirements above and the npm error. $($_.Exception.Message)"
+        }
+        if (-not $SkipDashboardBuild) {
+            Ensure-Git
+            if (-not (Test-Command "git")) { throw "Git is missing after prerequisite setup." }
+            $temp = Join-Path ([IO.Path]::GetTempPath()) "ai-tools-preflight-$([guid]::NewGuid().ToString('N'))"
+            New-Item -ItemType Directory -Path $temp | Out-Null
+            try {
+                $base = "https://raw.githubusercontent.com/ooples/token-optimizer-mcp/v$($package.version)"
+                foreach ($name in @("package.json","package-lock.json")) {
+                    Invoke-WebRequest -UseBasicParsing -Uri "$base/$name" -OutFile (Join-Path $temp $name)
+                }
+                Invoke-External npm "ci" "--prefix" $temp "--dry-run" "--ignore-scripts" "--engine-strict" "--force=false" | Out-Null
+            } finally {
+                Remove-Item -LiteralPath $temp -Recurse -Force
+            }
+        }
+    }
+    if ($Selected -contains "Serena") {
+        Ensure-Uv
+        if (-not (Test-Command "uv")) { throw "uv is missing after prerequisite setup." }
+        $requires = [string]$InstallPlan.Serena.requires_python
+        Write-Host "Serena $($InstallPlan.Serena.version) requires Python $requires."
+        $python = Find-CompatiblePython $requires
+        if (-not $python) {
+            if ($SkipPrerequisiteInstall) { throw "No Python matching $requires found. Run: uv python install `"$requires`", then retry." }
+            Invoke-External uv "python" "install" $requires
+            $python = Find-CompatiblePython $requires
+            if (-not $python) { throw "Cannot find Python matching $requires after installation." }
+        }
+        $script:SerenaPython = $python
+    }
+    Write-OK "Prerequisite checks passed. Target versions are fixed for this run."
+}
+
+# ===========================================================================
 # RTK
 # ===========================================================================
 
@@ -646,7 +793,7 @@ function Install-OrUpdate-Rtk($State) {
     Write-Section "RTK"
 
     $installed = Get-RtkInstalledVersion
-    $release   = Get-GitHubLatestRelease $RtkApiLatest "ai-tools-rtk-updater"
+    $release   = if ($InstallPlan.ContainsKey("RTK")) { $InstallPlan.RTK } else { Get-GitHubLatestRelease $RtkApiLatest "ai-tools-rtk-updater" }
     $latest    = Normalize-Version $release.tag_name
 
     Write-Info "Installed: $(if($installed){$installed}else{'not installed'})"
@@ -695,6 +842,8 @@ function Install-OrUpdate-Rtk($State) {
     Refresh-ProcessPath
 
     $installed = Get-RtkInstalledVersion
+
+    if (-not (Compare-VersionText $installed $latest)) { throw "RTK did not install the checked version $latest (detected: $installed)." }
 
     # Each client manages hooks and instructions in its own directory.
     if ((Test-Command "claude") -or (Test-Path (Join-Path $env:USERPROFILE ".claude"))) {
@@ -747,6 +896,7 @@ function Get-TokenInstalledVersion {
 }
 
 function Get-TokenLatestVersion {
+    if ($InstallPlan.ContainsKey("TokenOptimizer")) { return [string]$InstallPlan.TokenOptimizer.version }
     if (-not (Test-Command "npm")) { return $null }
     try { return Normalize-Version ((& npm view $TokenPackage version 2>$null | Out-String).Trim()) } catch {}
     return $null
@@ -759,14 +909,12 @@ function Update-TokenDashboard([string]$TokenVersion) {
     }
 
     if (-not $TokenVersion) {
-        Write-Warn2 "Unknown Token Optimizer version: dashboard not updated."
-        return
+        throw "Unknown Token Optimizer version: dashboard not updated."
     }
 
     Ensure-Git
     if (-not (Test-Command "git")) {
-        Write-Warn2 "Git unavailable: Token Optimizer dashboard not managed."
-        return
+        throw "Git unavailable: Token Optimizer dashboard not managed."
     }
 
     $needBuild = [bool]$ForceReinstall
@@ -786,8 +934,7 @@ function Update-TokenDashboard([string]$TokenVersion) {
                 if (-not $target) {
                     $remoteTag = (& git ls-remote --tags --refs origin "refs/tags/$releaseTag" 2>$null | Out-String).Trim()
                     if (-not $remoteTag) {
-                        Write-Warn2 "Release $releaseTag not found in the repository: dashboard not updated."
-                        return
+                        throw "Release $releaseTag not found in the repository: dashboard not updated."
                     }
 
                     Invoke-External git "fetch" "--depth" "1" "origin" "refs/tags/${releaseTag}:refs/tags/${releaseTag}"
@@ -811,16 +958,28 @@ function Update-TokenDashboard([string]$TokenVersion) {
         $needBuild = $true
     }
 
-    if (-not (Test-Path (Join-Path $TokenDashboardDir "node_modules"))) {
+    Push-Location $TokenDashboardDir
+    try {
+        $buildCommit = (& git rev-parse HEAD | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $buildCommit) {
+            throw "Cannot determine Token Optimizer dashboard commit."
+        }
+    } finally { Pop-Location }
+    $builtCommit = if (Test-Path $TokenDashboardBuildPath) { ([string](Get-Content $TokenDashboardBuildPath -Raw)).Trim() } else { "" }
+    if ($builtCommit -ne $buildCommit -or -not (Test-Path (Join-Path $TokenDashboardDir "node_modules"))) {
         $needBuild = $true
     }
 
     if ($needBuild) {
+        if (Test-Path $TokenDashboardBuildPath) {
+            Remove-Item -LiteralPath $TokenDashboardBuildPath
+        }
         Push-Location $TokenDashboardDir
         try {
             Invoke-External npm "ci"
             Invoke-External npm "run" "build"
         } finally { Pop-Location }
+        [IO.File]::WriteAllText($TokenDashboardBuildPath,$buildCommit,(New-Object Text.UTF8Encoding($false)))
         Write-OK "Token Optimizer dashboard built."
     } elseif ($hasLocalChanges) {
         Write-OK "Local Token Optimizer dashboard preserved."
@@ -849,9 +1008,9 @@ function Install-OrUpdate-TokenOptimizer($State) {
         if ($ForceReinstall -or -not $installed -or ($latest -and -not (Compare-VersionText $installed $latest))) {
             $wasUpdated = $true
             if ($ForceReinstall) {
-                Invoke-External npm "install" "-g" "--force" "$TokenPackage@latest"
+                Invoke-External npm "install" "-g" "--force" "$TokenPackage@$latest"
             } else {
-                Invoke-External npm "install" "-g" "$TokenPackage@latest"
+                Invoke-External npm "install" "-g" "--engine-strict" "$TokenPackage@$latest"
             }
             $installed = Get-TokenInstalledVersion
             Write-OK "Token Optimizer : $installed"
@@ -859,6 +1018,7 @@ function Install-OrUpdate-TokenOptimizer($State) {
             Write-Info "Token Optimizer is already up to date."
         }
 
+        if (-not (Compare-VersionText $installed $latest)) { throw "Token Optimizer did not install the checked version $latest (detected: $installed)." }
         Update-TokenDashboard $installed
     }
 
@@ -886,6 +1046,7 @@ function Get-SerenaInstalledVersion {
 }
 
 function Get-SerenaLatestVersion {
+    if ($InstallPlan.ContainsKey("Serena")) { return [string]$InstallPlan.Serena.version }
     try {
         $p = Invoke-RestMethod -Uri $SerenaPypi -Headers @{ "User-Agent"="ai-tools-updater" }
         return Normalize-Version $p.info.version
@@ -916,14 +1077,14 @@ function Install-OrUpdate-Serena($State) {
     if (-not $Check) {
         if ($ForceReinstall) {
             $wasUpdated = $true
-            Invoke-External uv "tool" "install" "--force" "-p" "3.13" $SerenaTool
+            Invoke-External uv "tool" "install" "--force" "-p" $SerenaPython "$SerenaTool==$latest"
         } elseif (-not $installed) {
             $wasUpdated = $true
-            Invoke-External uv "tool" "install" "-p" "3.13" $SerenaTool
+            Invoke-External uv "tool" "install" "-p" $SerenaPython "$SerenaTool==$latest"
         } elseif ($latest -and -not (Compare-VersionText $installed $latest)) {
             $wasUpdated = $true
             Invoke-ExternalWithRetry -Operation "Serena upgrade" -Action {
-                Invoke-External uv "tool" "upgrade" $SerenaTool
+                Invoke-External uv "tool" "install" "-p" $SerenaPython "$SerenaTool==$latest"
             }
         } else {
             Write-Info "Serena is already up to date."
@@ -932,6 +1093,7 @@ function Install-OrUpdate-Serena($State) {
         if (Test-Path $SerenaBinDir) { Add-UserPath $SerenaBinDir }
         Refresh-ProcessPath
         $installed = Get-SerenaInstalledVersion
+        if (-not (Compare-VersionText $installed $latest)) { throw "Serena did not install the checked version $latest (detected: $installed)." }
 
         $serenaConfig = Join-Path $env:USERPROFILE ".serena\serena_config.yml"
         if (-not (Test-Path $serenaConfig) -and (Test-Command "serena")) {
@@ -979,6 +1141,7 @@ function Get-CbmInstalledVersion {
 }
 
 function Get-CbmLatestVersion {
+    if ($InstallPlan.ContainsKey("CodebaseMemory")) { return Normalize-Version $InstallPlan.CodebaseMemory.tag_name }
     try {
         $release = Get-GitHubLatestRelease $CbmApiLatest "ai-tools-cbm-updater"
         return Normalize-Version $release.tag_name
@@ -992,6 +1155,7 @@ function Install-CbmOfficial {
     $tmpInstaller = Join-Path $installerTempDir "install.ps1"
     $previousTemp = $env:TEMP
     $previousTmp = $env:TMP
+    $previousDownloadUrl = $env:CBM_DOWNLOAD_URL
     try {
         New-Item -ItemType Directory -Path $installerTempDir -Force | Out-Null
         $stagingAcl = New-Object System.Security.AccessControl.DirectorySecurity
@@ -1004,7 +1168,10 @@ function Install-CbmOfficial {
 
         $env:TEMP = $installerTempDir
         $env:TMP = $installerTempDir
-        Invoke-WebRequest -Uri $CbmInstallerUrl -OutFile $tmpInstaller -Headers @{ "User-Agent"="ai-tools-updater" }
+        $tag = $InstallPlan.CodebaseMemory.tag_name
+        $env:CBM_DOWNLOAD_URL = "https://github.com/DeusData/codebase-memory-mcp/releases/download/$tag"
+        $installerUrl = $CbmInstallerUrl.Replace("/main/","/$tag/")
+        Invoke-WebRequest -Uri $installerUrl -OutFile $tmpInstaller -Headers @{ "User-Agent"="ai-tools-updater" }
         Unblock-File $tmpInstaller -ErrorAction SilentlyContinue
 
         # --skip-config avoids automatic hooks/configuration for other agents.
@@ -1016,6 +1183,7 @@ function Install-CbmOfficial {
     } finally {
         $env:TEMP = $previousTemp
         $env:TMP = $previousTmp
+        $env:CBM_DOWNLOAD_URL = $previousDownloadUrl
         Remove-Item -LiteralPath $installerTempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
@@ -1031,27 +1199,9 @@ function Install-OrUpdate-CodebaseMemory($State) {
 
     $wasUpdated = $false
     if (-not $Check) {
-        if ($ForceReinstall -or -not $installed) {
+        if ($ForceReinstall -or -not $installed -or -not (Compare-VersionText $installed $latest)) {
             $wasUpdated = $true
             Install-CbmOfficial
-        } elseif ($latest -and -not (Compare-VersionText $installed $latest)) {
-            $wasUpdated = $true
-            Write-Info "Updating Codebase Memory..."
-            $updated = $false
-
-            try {
-                $cbmCmd = if (Test-Path $CbmExe) { $CbmExe } else { (Get-Command "codebase-memory-mcp").Source }
-                & $cbmCmd update
-                $versionAfterUpdate = Get-CbmInstalledVersion
-                if ($LASTEXITCODE -eq 0 -and (Compare-VersionText $versionAfterUpdate $latest)) {
-                    $updated = $true
-                }
-            } catch {}
-
-            if (-not $updated) {
-                Write-Warn2 "Native updater did not complete successfully -> using the official installer."
-                Install-CbmOfficial
-            }
         } else {
             Write-Info "Codebase Memory is already up to date."
         }
@@ -1059,6 +1209,7 @@ function Install-OrUpdate-CodebaseMemory($State) {
         if (Test-Path $CbmInstallDir) { Add-UserPath $CbmInstallDir }
         Refresh-ProcessPath
         $installed = Get-CbmInstalledVersion
+        if (-not (Compare-VersionText $installed $latest)) { throw "Codebase Memory did not install the checked version $latest (detected: $installed)." }
 
         $cbmCmd = if (Test-Path $CbmExe) { $CbmExe } elseif (Test-Command "codebase-memory-mcp") { (Get-Command "codebase-memory-mcp").Source } else { $null }
         if ($cbmCmd) {
@@ -1665,13 +1816,11 @@ try {
         Write-Host "Mode: INSTALL / UPDATE" -ForegroundColor Green
     }
 
-    # Install only the prerequisites required by the selected tools.
-    if ($selected -contains "TokenOptimizer") {
-        Ensure-Node
-        if (-not $SkipDashboardBuild) { Ensure-Git }
-    }
-    if ($selected -contains "Serena") {
-        Ensure-Uv
+    if (-not $Check) {
+        Initialize-InstallPlan $selected
+        Test-InstallPrerequisites $selected
+    } elseif ($selected -contains "TokenOptimizer" -and -not $SkipDashboardBuild) {
+        Ensure-Git
     }
 
     # Tools

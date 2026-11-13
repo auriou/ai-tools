@@ -13,6 +13,8 @@
 
 set -uo pipefail
 
+AI_TOOLS_VERSION="1.1.4"
+
 # ===========================================================================
 # Managed locations
 # ===========================================================================
@@ -39,6 +41,7 @@ RTK_EXE="$BIN_DIR/rtk"
 TOKEN_PACKAGE="@ooples/token-optimizer-mcp"
 TOKEN_DASHBOARD_REPO="https://github.com/ooples/token-optimizer-mcp.git"
 TOKEN_DASHBOARD_DIR="$APPS_DIR/token-optimizer-dashboard"
+TOKEN_DASHBOARD_BUILD_PATH="$STATE_DIR/token-optimizer-dashboard-build.txt"
 
 # Node.js (Token Optimizer prerequisite, portable download)
 NODE_APPS_DIR="$APPS_DIR/nodejs"
@@ -82,6 +85,12 @@ DASHBOARD=""
 SKIP_DASHBOARD_BUILD=false
 SKIP_PREREQUISITE_INSTALL=false
 VERBOSE=false
+RTK_RELEASE_JSON=""
+TOKEN_TARGET_VERSION=""
+SERENA_TARGET_VERSION=""
+SERENA_PYTHON_REQUIRES=""
+SERENA_PYTHON=""
+CBM_RELEASE_JSON=""
 
 # ===========================================================================
 # Output (all messages go to stderr; stdout is reserved for computed values)
@@ -320,9 +329,9 @@ install_self() {
     if [ ! "$source" -ef "$MANAGED_SCRIPT_PATH" ]; then
         cp "$source" "$MANAGED_SCRIPT_PATH" || return 1
         if [ "$update_only" = true ]; then
-            write_ok "Manager script updated: $MANAGED_SCRIPT_PATH"
+            write_ok "Manager script updated to ai-tools ${AI_TOOLS_VERSION}: $MANAGED_SCRIPT_PATH"
         else
-            write_ok "Script installed: $MANAGED_SCRIPT_PATH"
+            write_ok "ai-tools $AI_TOOLS_VERSION installed: $MANAGED_SCRIPT_PATH"
         fi
     fi
     chmod +x "$MANAGED_SCRIPT_PATH" 2>/dev/null || true
@@ -438,15 +447,17 @@ ensure_jq() {
 # ===========================================================================
 
 state_init() {
-    if [ "$CHECK" = true ]; then
-        local source_path="$INSTALLED_STATE_PATH"
-        INSTALLED_STATE_PATH=$(mktemp) || return 1
-        trap 'rm -f -- "$INSTALLED_STATE_PATH"' EXIT
-        if [ -s "$source_path" ]; then
-            cp "$source_path" "$INSTALLED_STATE_PATH" || return 1
-        fi
-    else
+    STATE_SAVE_PATH="$INSTALLED_STATE_PATH"
+    if [ "$CHECK" != true ]; then
         mkdir -p "$STATE_DIR" || return 1
+        STATE_WORK_PATH=$(mktemp "$STATE_DIR/installed.XXXXXX") || return 1
+    else
+        STATE_WORK_PATH=$(mktemp) || return 1
+    fi
+    INSTALLED_STATE_PATH="$STATE_WORK_PATH"
+    trap 'rm -f -- "$STATE_WORK_PATH"' EXIT
+    if [ -s "$STATE_SAVE_PATH" ]; then
+        cp "$STATE_SAVE_PATH" "$INSTALLED_STATE_PATH" || return 1
     fi
     if [ ! -s "$INSTALLED_STATE_PATH" ]; then
         printf '%s' '{"schemaVersion":1,"selectedTools":[],"lastRun":null,"tools":{}}' > "$INSTALLED_STATE_PATH"
@@ -456,8 +467,8 @@ state_init() {
         if [ "$CHECK" = true ]; then
             write_warn "Cannot read installed.json. Running diagnostics with empty temporary state."
         else
-            local backup="$INSTALLED_STATE_PATH.corrupt.$(date +%Y%m%d-%H%M%S)"
-            cp "$INSTALLED_STATE_PATH" "$backup" || return 1
+            local backup="$STATE_SAVE_PATH.corrupt.$(date +%Y%m%d-%H%M%S)"
+            cp "$STATE_SAVE_PATH" "$backup" || return 1
             write_warn "Cannot read installed.json. Backup: $backup"
         fi
         printf '%s' '{"schemaVersion":1,"selectedTools":[],"lastRun":null,"tools":{}}' > "$INSTALLED_STATE_PATH"
@@ -508,7 +519,11 @@ state_save_last_run() {
     local now tmp
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     tmp=$(mktemp)
-    "$JQ" --arg now "$now" '.lastRun=$now' "$INSTALLED_STATE_PATH" > "$tmp" && mv "$tmp" "$INSTALLED_STATE_PATH"
+    "$JQ" --arg now "$now" '.lastRun=$now' "$INSTALLED_STATE_PATH" > "$tmp" && mv "$tmp" "$INSTALLED_STATE_PATH" || return 1
+    if [ "$CHECK" != true ]; then
+        mv "$INSTALLED_STATE_PATH" "$STATE_SAVE_PATH" || return 1
+        INSTALLED_STATE_PATH="$STATE_SAVE_PATH"
+    fi
 }
 
 # ===========================================================================
@@ -756,6 +771,146 @@ ensure_uv() {
 }
 
 # ===========================================================================
+# Install preflight
+# ===========================================================================
+
+get_rtk_asset_name() {
+    case "$(detect_arch)" in
+        amd64) echo "rtk-x86_64-unknown-linux-musl.tar.gz" ;;
+        arm64) echo "rtk-aarch64-unknown-linux-musl.tar.gz" ;;
+        *) write_fail "Unsupported architecture for RTK: $(uname -m)"; return 1 ;;
+    esac
+}
+
+assert_release_asset() {
+    local release="$1" name="$2"
+    if ! printf '%s' "$release" | "$JQ" -e --arg name "$name" \
+        '.tag_name and any(.assets[]; .name == $name and (.browser_download_url | length > 0))' >/dev/null; then
+        write_fail "Release has no asset for this platform: $name"
+        return 1
+    fi
+}
+
+initialize_install_plan() {
+    local selected_csv="$1" package arch asset
+    RTK_RELEASE_JSON=""
+    TOKEN_TARGET_VERSION=""
+    SERENA_TARGET_VERSION=""
+    CBM_RELEASE_JSON=""
+    case ",$selected_csv," in *,RTK,*)
+        asset=$(get_rtk_asset_name) || return 1
+        RTK_RELEASE_JSON=$(get_github_latest_release "$RTK_API_LATEST") || { write_fail "Cannot resolve the RTK target release."; return 1; }
+        assert_release_asset "$RTK_RELEASE_JSON" "$asset" || return 1
+    ;; esac
+    case ",$selected_csv," in *,TokenOptimizer,*)
+        package=$(curl -fsSL "https://registry.npmjs.org/${TOKEN_PACKAGE/\//%2f}/latest") || { write_fail "Cannot read Token Optimizer requirements."; return 1; }
+        TOKEN_TARGET_VERSION=$(printf '%s' "$package" | "$JQ" -er '.version | select(type == "string" and length > 0)') || { write_fail "Cannot determine the Token Optimizer target version."; return 1; }
+        TOKEN_NODE_REQUIRES=$(printf '%s' "$package" | "$JQ" -r '.engines.node // "not declared"') || return 1
+        TOKEN_NPM_REQUIRES=$(printf '%s' "$package" | "$JQ" -r '.engines.npm // "not declared"') || return 1
+    ;; esac
+    case ",$selected_csv," in *,Serena,*)
+        package=$(curl -fsSL "$SERENA_PYPI") || { write_fail "Cannot read Serena requirements."; return 1; }
+        SERENA_TARGET_VERSION=$(printf '%s' "$package" | "$JQ" -er '.info.version | select(type == "string" and length > 0)') || { write_fail "Cannot determine the Serena target version."; return 1; }
+        SERENA_PYTHON_REQUIRES=$(printf '%s' "$package" | "$JQ" -er '.info.requires_python | select(type == "string" and length > 0)') || { write_fail "Serena metadata is missing its Python requirements."; return 1; }
+    ;; esac
+    case ",$selected_csv," in *,CodebaseMemory,*)
+        arch=$(detect_arch)
+        case "$arch" in amd64|arm64) : ;; *) write_fail "Unsupported architecture for Codebase Memory: $(uname -m)"; return 1 ;; esac
+        CBM_RELEASE_JSON=$(get_github_latest_release "$CBM_API_LATEST") || { write_fail "Cannot resolve the Codebase Memory target release."; return 1; }
+        assert_release_asset "$CBM_RELEASE_JSON" "codebase-memory-mcp-linux-${arch}-portable.tar.gz" || return 1
+        assert_release_asset "$CBM_RELEASE_JSON" "checksums.txt" || return 1
+    ;; esac
+}
+
+show_required_prerequisites() {
+    local selected_csv="$1"
+    write_section "Prerequisites to install / update if missing or incompatible" always
+    {
+        case ",$selected_csv," in *,TokenOptimizer,*)
+            echo "Token Optimizer $TOKEN_TARGET_VERSION:"
+            echo "  Node.js: $TOKEN_NODE_REQUIRES"
+            echo "  npm: $TOKEN_NPM_REQUIRES (npx must also be available)"
+            echo "  Install a matching Node.js release (includes npm/npx): https://nodejs.org/en/download"
+            echo "  If you use nvm and the current Node.js LTS satisfies the required range:"
+            echo "    nvm install --lts && nvm use --lts"
+            if [ "$TOKEN_NPM_REQUIRES" != "not declared" ]; then
+                echo "  If only npm needs updating, after installing compatible Node.js:"
+                echo "    npm install --global \"npm@$TOKEN_NPM_REQUIRES\""
+            fi
+            if [ "$SKIP_DASHBOARD_BUILD" != true ]; then
+                echo "  Git is required for the dashboard. Use your distribution's package manager:"
+                echo "    Debian/Ubuntu: sudo apt install git"
+                echo "    Fedora/RHEL:   sudo dnf install git"
+            fi
+        ;; esac
+        case ",$selected_csv," in *,Serena,*)
+            echo "Serena $SERENA_TARGET_VERSION:"
+            echo "  uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
+            echo "  Python: $SERENA_PYTHON_REQUIRES"
+            echo "    uv python install \"$SERENA_PYTHON_REQUIRES\""
+        ;; esac
+        case ",$selected_csv," in *,RTK,*|*,CodebaseMemory,*)
+            echo "RTK / Codebase Memory use prebuilt binaries; no Rust or Go compiler is required."
+        ;; esac
+        echo "After manual installation, reopen your terminal and rerun the same ai-tools command."
+    } >&2
+}
+
+test_install_prerequisites() {
+    local selected_csv="$1"
+    show_required_prerequisites "$selected_csv"
+    write_section "Prerequisite checks" always
+    case ",$selected_csv," in *,TokenOptimizer,*)
+        ensure_node || return 1
+        if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1 || ! command -v npx >/dev/null 2>&1; then
+            write_fail "Node/npm/npx are missing after prerequisite setup."
+            return 1
+        fi
+        echo "Token Optimizer $TOKEN_TARGET_VERSION requires Node $TOKEN_NODE_REQUIRES, npm $TOKEN_NPM_REQUIRES." >&2
+        echo "Detected: Node $(node --version), npm $(npm --version)." >&2
+        if ! npm install --global --dry-run --ignore-scripts --engine-strict --force=false "$TOKEN_PACKAGE@$TOKEN_TARGET_VERSION" >/dev/null; then
+            write_fail "Token Optimizer prerequisite check failed. Check the Node/npm requirements above and the npm error."
+            return 1
+        fi
+        if [ "$SKIP_DASHBOARD_BUILD" != true ]; then
+            ensure_git || return 1
+            local temp base rc=0 name
+            temp=$(mktemp -d) || return 1
+            base="https://raw.githubusercontent.com/ooples/token-optimizer-mcp/v$TOKEN_TARGET_VERSION"
+            for name in package.json package-lock.json; do
+                curl -fsSL "$base/$name" -o "$temp/$name" || { rc=1; break; }
+            done
+            if [ "$rc" -eq 0 ]; then
+                npm ci --prefix "$temp" --dry-run --ignore-scripts --engine-strict --force=false >/dev/null || rc=1
+            fi
+            rm -rf -- "$temp"
+            if [ "$rc" -ne 0 ]; then
+                write_fail "Token Optimizer dashboard prerequisite check failed."
+                return 1
+            fi
+        fi
+    ;; esac
+    case ",$selected_csv," in *,Serena,*)
+        ensure_uv || return 1
+        if ! command -v uv >/dev/null 2>&1; then
+            write_fail "uv is missing after prerequisite setup."
+            return 1
+        fi
+        echo "Serena $SERENA_TARGET_VERSION requires Python $SERENA_PYTHON_REQUIRES." >&2
+        if ! SERENA_PYTHON=$(uv python find --no-project --no-python-downloads "$SERENA_PYTHON_REQUIRES"); then
+            if [ "$SKIP_PREREQUISITE_INSTALL" = true ]; then
+                write_fail "No Python matching $SERENA_PYTHON_REQUIRES found. Run: uv python install \"$SERENA_PYTHON_REQUIRES\", then retry."
+                return 1
+            fi
+            uv python install "$SERENA_PYTHON_REQUIRES" || { write_fail "Compatible Python installation failed."; return 1; }
+            SERENA_PYTHON=$(uv python find --no-project --no-python-downloads "$SERENA_PYTHON_REQUIRES") || { write_fail "Cannot find compatible Python after installation."; return 1; }
+        fi
+        [ -n "$SERENA_PYTHON" ] || { write_fail "uv returned no compatible Python interpreter."; return 1; }
+    ;; esac
+    write_ok "Prerequisite checks passed. Target versions are fixed for this run."
+}
+
+# ===========================================================================
 # RTK
 # ===========================================================================
 
@@ -771,9 +926,12 @@ get_rtk_installed_version() {
 install_or_update_rtk() {
     write_section "RTK"
 
-    local installed latest release_json arch asset
+    local installed latest release_json asset
     installed=$(get_rtk_installed_version)
-    release_json=$(get_github_latest_release "$RTK_API_LATEST") || { write_fail "Cannot reach GitHub for RTK."; return 1; }
+    release_json="$RTK_RELEASE_JSON"
+    if [ -z "$release_json" ]; then
+        release_json=$(get_github_latest_release "$RTK_API_LATEST") || { write_fail "Cannot reach GitHub for RTK."; return 1; }
+    fi
     latest=$(printf '%s' "$release_json" | "$JQ" -r '.tag_name // empty' | sed 's/^v//')
 
     write_info "Installed: ${installed:-not installed}"
@@ -788,12 +946,7 @@ install_or_update_rtk() {
         return 0
     fi
 
-    arch=$(detect_arch)
-    case "$arch" in
-        amd64) asset="rtk-x86_64-unknown-linux-musl.tar.gz" ;;
-        arm64) asset="rtk-aarch64-unknown-linux-gnu.tar.gz" ;;
-        *) write_fail "Unsupported architecture for RTK: $(uname -m)"; return 1 ;;
-    esac
+    asset=$(get_rtk_asset_name) || return 1
 
     local was_updated=false
     if [ "$FORCE_REINSTALL" = true ] || [ -z "$installed" ] || ! compare_version_text "$installed" "$latest"; then
@@ -844,6 +997,10 @@ install_or_update_rtk() {
 
     add_user_path "$BIN_DIR"
     installed=$(get_rtk_installed_version)
+    if ! compare_version_text "$installed" "$latest"; then
+        write_fail "RTK did not install the checked version $latest (detected: $installed)."
+        return 1
+    fi
 
     if command -v claude >/dev/null 2>&1 || [ -d "$HOME/.claude" ]; then
         write_info "Claude detected -> checking/initializing global RTK integration..."
@@ -887,6 +1044,7 @@ get_token_installed_version() {
 }
 
 get_token_latest_version() {
+    if [ -n "$TOKEN_TARGET_VERSION" ]; then printf '%s\n' "$TOKEN_TARGET_VERSION"; return; fi
     command -v npm >/dev/null 2>&1 || return 0
     npm view "$TOKEN_PACKAGE" version 2>/dev/null | tr -d '\r'
 }
@@ -898,12 +1056,12 @@ update_token_dashboard() {
         return
     fi
     if [ -z "$token_version" ]; then
-        write_warn "Unknown Token Optimizer version: dashboard not updated."
-        return
+        write_fail "Unknown Token Optimizer version: dashboard not updated."
+        return 1
     fi
     if ! command -v git >/dev/null 2>&1; then
-        write_warn "Git unavailable: Token Optimizer dashboard not managed."
-        return
+        write_fail "Git unavailable: Token Optimizer dashboard not managed."
+        return 1
     fi
 
     local need_build="$FORCE_REINSTALL" has_local_changes=false
@@ -922,7 +1080,7 @@ update_token_dashboard() {
             if [ -z "$target" ]; then
                 remote_tag=$(git ls-remote --tags --refs origin "refs/tags/${release_tag}" 2>/dev/null || true)
                 if [ -z "$remote_tag" ]; then
-                    write_warn "Release ${release_tag} not found in the repository: dashboard not updated."
+                    write_fail "Release ${release_tag} not found in the repository: dashboard not updated."
                     exit 11
                 fi
                 git fetch --depth 1 origin "refs/tags/${release_tag}:refs/tags/${release_tag}" || exit 12
@@ -938,28 +1096,38 @@ update_token_dashboard() {
 
         case "$rc" in
             10) has_local_changes=true ;;
-            11) return ;;
+            11) return 1 ;;
             20) need_build=true ;;
             0) : ;;
-            *) write_warn "Token Optimizer dashboard update incomplete (exit code $rc)." ;;
+            *) write_fail "Token Optimizer dashboard update incomplete (exit code $rc)."; return 1 ;;
         esac
     else
         if [ -d "$TOKEN_DASHBOARD_DIR" ]; then
             local backup="$TOKEN_DASHBOARD_DIR.backup.$(date +%Y%m%d-%H%M%S)"
-            mv "$TOKEN_DASHBOARD_DIR" "$backup"
+            mv "$TOKEN_DASHBOARD_DIR" "$backup" || return 1
             write_warn "Previous dashboard directory moved: $backup"
         fi
-        git clone --depth 1 --branch "$release_tag" "$TOKEN_DASHBOARD_REPO" "$TOKEN_DASHBOARD_DIR" || { write_warn "Token Optimizer dashboard clone failed."; return; }
+        git clone --depth 1 --branch "$release_tag" "$TOKEN_DASHBOARD_REPO" "$TOKEN_DASHBOARD_DIR" || { write_fail "Token Optimizer dashboard clone failed."; return 1; }
         need_build=true
     fi
 
-    [ -d "$TOKEN_DASHBOARD_DIR/node_modules" ] || need_build=true
+    local build_commit built_commit=""
+    build_commit=$(cd "$TOKEN_DASHBOARD_DIR" && git rev-parse HEAD) || { write_fail "Cannot determine Token Optimizer dashboard commit."; return 1; }
+    if [ -f "$TOKEN_DASHBOARD_BUILD_PATH" ]; then
+        built_commit=$(cat "$TOKEN_DASHBOARD_BUILD_PATH") || return 1
+    fi
+    if [ "$built_commit" != "$build_commit" ] || [ ! -d "$TOKEN_DASHBOARD_DIR/node_modules" ]; then
+        need_build=true
+    fi
 
     if [ "$need_build" = true ]; then
+        rm -f -- "$TOKEN_DASHBOARD_BUILD_PATH" || return 1
         if (cd "$TOKEN_DASHBOARD_DIR" && npm ci && npm run build); then
+            printf '%s' "$build_commit" > "$TOKEN_DASHBOARD_BUILD_PATH" || return 1
             write_ok "Token Optimizer dashboard built."
         else
-            write_warn "Token Optimizer dashboard build failed."
+            write_fail "Token Optimizer dashboard build failed."
+            return 1
         fi
     elif [ "$has_local_changes" = true ]; then
         write_ok "Local Token Optimizer dashboard preserved."
@@ -988,9 +1156,9 @@ install_or_update_token_optimizer() {
     if [ "$CHECK" != true ]; then
         if [ "$FORCE_REINSTALL" = true ] || [ -z "$installed" ] || { [ -n "$latest" ] && ! compare_version_text "$installed" "$latest"; }; then
             was_updated=true
-            local install_args=(install -g)
+            local install_args=(install -g --engine-strict)
             if [ "$FORCE_REINSTALL" = true ]; then install_args+=(--force); fi
-            if ! npm "${install_args[@]}" "${TOKEN_PACKAGE}@latest"; then
+            if ! npm "${install_args[@]}" "${TOKEN_PACKAGE}@$latest"; then
                 write_fail "Token Optimizer installation failed."
                 return 1
             fi
@@ -1000,7 +1168,11 @@ install_or_update_token_optimizer() {
             write_info "Token Optimizer is already up to date."
         fi
 
-        update_token_dashboard "$installed"
+        if ! compare_version_text "$installed" "$latest"; then
+            write_fail "Token Optimizer did not install the checked version $latest (detected: $installed)."
+            return 1
+        fi
+        update_token_dashboard "$installed" || return 1
     fi
 
     local status="not-installed"
@@ -1027,6 +1199,7 @@ get_serena_installed_version() {
 }
 
 get_serena_latest_version() {
+    if [ -n "$SERENA_TARGET_VERSION" ]; then printf '%s\n' "$SERENA_TARGET_VERSION"; return; fi
     local json
     json=$(curl -fsSL -H "User-Agent: ai-tools-updater" "$SERENA_PYPI" 2>/dev/null) || return 0
     printf '%s' "$json" | "$JQ" -r '.info.version // empty'
@@ -1054,22 +1227,22 @@ install_or_update_serena() {
     if [ "$CHECK" != true ]; then
         if [ "$FORCE_REINSTALL" = true ]; then
             was_updated=true
-            if ! uv tool install --force -p 3.13 "$SERENA_TOOL"; then
+            if ! uv tool install --force -p "$SERENA_PYTHON" "$SERENA_TOOL==$latest"; then
                 write_fail "Serena reinstallation failed."
                 return 1
             fi
         elif [ -z "$installed" ]; then
             was_updated=true
-            if ! uv tool install -p 3.13 "$SERENA_TOOL"; then
+            if ! uv tool install -p "$SERENA_PYTHON" "$SERENA_TOOL==$latest"; then
                 write_fail "Serena installation failed."
                 return 1
             fi
         elif [ -n "$latest" ] && ! compare_version_text "$installed" "$latest"; then
             was_updated=true
-            if ! uv tool upgrade "$SERENA_TOOL"; then
+            if ! uv tool install -p "$SERENA_PYTHON" "$SERENA_TOOL==$latest"; then
                 write_warn "Serena update failed; retrying once in 2 seconds."
                 sleep 2
-                if ! uv tool upgrade "$SERENA_TOOL"; then
+                if ! uv tool install -p "$SERENA_PYTHON" "$SERENA_TOOL==$latest"; then
                     write_fail "Serena update failed after retry."
                     return 1
                 fi
@@ -1080,6 +1253,10 @@ install_or_update_serena() {
 
         [ -d "$SERENA_BIN_DIR" ] && add_user_path "$SERENA_BIN_DIR"
         installed=$(get_serena_installed_version)
+        if ! compare_version_text "$installed" "$latest"; then
+            write_fail "Serena did not install the checked version $latest (detected: $installed)."
+            return 1
+        fi
 
         local serena_config="$HOME/.serena/serena_config.yml"
         if [ ! -f "$serena_config" ] && command -v serena >/dev/null 2>&1; then
@@ -1119,13 +1296,18 @@ get_cbm_installed_version() {
 }
 
 get_cbm_latest_version() {
+    if [ -n "$CBM_RELEASE_JSON" ]; then printf '%s' "$CBM_RELEASE_JSON" | "$JQ" -r '.tag_name | ltrimstr("v")'; return; fi
     local json
     json=$(get_github_latest_release "$CBM_API_LATEST") || return 0
     printf '%s' "$json" | "$JQ" -r '.tag_name // empty' | sed 's/^v//'
 }
 
 install_cbm_official() {
-    if ! curl -fsSL "$CBM_INSTALLER_URL" | bash -s -- --skip-config; then
+    local tag
+    tag=$(printf '%s' "$CBM_RELEASE_JSON" | "$JQ" -er '.tag_name') || return 1
+    local installer_url="${CBM_INSTALLER_URL/\/main\//\/$tag\/}"
+    local download_url="https://github.com/DeusData/codebase-memory-mcp/releases/download/$tag"
+    if ! curl -fsSL "$installer_url" | CBM_DOWNLOAD_URL="$download_url" bash -s -- --skip-config; then
         write_fail "Official Codebase Memory installation failed."
         return 1
     fi
@@ -1143,28 +1325,19 @@ install_or_update_codebase_memory() {
 
     local was_updated=false
     if [ "$CHECK" != true ]; then
-        if [ "$FORCE_REINSTALL" = true ] || [ -z "$installed" ]; then
+        if [ "$FORCE_REINSTALL" = true ] || [ -z "$installed" ] || ! compare_version_text "$installed" "$latest"; then
             was_updated=true
             install_cbm_official || return 1
-        elif [ -n "$latest" ] && ! compare_version_text "$installed" "$latest"; then
-            was_updated=true
-            write_info "Updating Codebase Memory..."
-            local updated=false cbm_cmd
-            cbm_cmd=$(get_cbm_command)
-            if [ -n "$cbm_cmd" ] && "$cbm_cmd" update; then
-                local after; after=$(get_cbm_installed_version)
-                compare_version_text "$after" "$latest" && updated=true
-            fi
-            if [ "$updated" != true ]; then
-                write_warn "Native updater did not complete successfully -> using the official installer."
-                install_cbm_official || return 1
-            fi
         else
             write_info "Codebase Memory is already up to date."
         fi
 
         [ -d "$CBM_INSTALL_DIR" ] && add_user_path "$CBM_INSTALL_DIR"
         installed=$(get_cbm_installed_version)
+        if ! compare_version_text "$installed" "$latest"; then
+            write_fail "Codebase Memory did not install the checked version $latest (detected: $installed)."
+            return 1
+        fi
 
         local cbm_cmd; cbm_cmd=$(get_cbm_command)
         if [ -n "$cbm_cmd" ]; then
@@ -1782,11 +1955,12 @@ main() {
         fi
     } >&2
 
-    case ",$selected_csv," in *,TokenOptimizer,*)
-        ensure_node
-        [ "$SKIP_DASHBOARD_BUILD" = true ] || ensure_git
-    ;; esac
-    case ",$selected_csv," in *,Serena,*) ensure_uv ;; esac
+    if [ "$CHECK" != true ]; then
+        initialize_install_plan "$selected_csv" || return 1
+        test_install_prerequisites "$selected_csv" || return 1
+    elif [[ ",$selected_csv," == *,TokenOptimizer,* ]] && [ "$SKIP_DASHBOARD_BUILD" != true ]; then
+        ensure_git
+    fi
 
     case ",$selected_csv," in *,RTK,*) install_or_update_rtk || exit 1 ;; esac
     case ",$selected_csv," in *,TokenOptimizer,*) install_or_update_token_optimizer || exit 1 ;; esac
