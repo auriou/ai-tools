@@ -2067,19 +2067,22 @@ handle_external_copy() {
     if [ -f "$MANAGED_SCRIPT_PATH" ]; then
         installed_version=$(sed -n 's/^AI_TOOLS_VERSION="\([0-9][0-9.]*\)"$/\1/p' "$MANAGED_SCRIPT_PATH" | head -n1)
         if [ "$installed_version" = "$AI_TOOLS_VERSION" ]; then
-            write_ok "ai-tools $AI_TOOLS_VERSION is already installed. Nothing to do."
-            return 0
-        fi
-        if [ -n "$installed_version" ] && [ "$(printf '%s\n' "$AI_TOOLS_VERSION" "$installed_version" | sort -V | tail -n1)" = "$installed_version" ]; then
+            write_ok "ai-tools $AI_TOOLS_VERSION is already installed."
+            if [ ${#ORIGINAL_ARGS[@]} -eq 0 ]; then
+                read_yes_no "Force reinstall selected tools now?" false || return 0
+                ORIGINAL_ARGS=(--force-reinstall)
+            fi
+        elif [ -n "$installed_version" ] && [ "$(printf '%s\n' "$AI_TOOLS_VERSION" "$installed_version" | sort -V | tail -n1)" = "$installed_version" ]; then
             write_warn "Installed ai-tools $installed_version is newer than this copy ($AI_TOOLS_VERSION). No downgrade performed."
             return 0
+        else
+            write_info "Installed manager: ${installed_version:-legacy (unversioned)}; downloaded: $AI_TOOLS_VERSION"
+            read_yes_no "Update installed ai-tools to $AI_TOOLS_VERSION and then manage tools?" true || return 0
+            local backup="$MANAGED_SCRIPT_PATH.backup.$(date +%Y%m%d-%H%M%S)"
+            cp -- "$MANAGED_SCRIPT_PATH" "$backup" || return 2
+            write_ok "Previous manager backed up: $backup"
+            install_self true || return 2
         fi
-        write_info "Installed manager: ${installed_version:-legacy (unversioned)}; downloaded: $AI_TOOLS_VERSION"
-        read_yes_no "Update installed ai-tools to $AI_TOOLS_VERSION and then manage tools?" true || return 0
-        local backup="$MANAGED_SCRIPT_PATH.backup.$(date +%Y%m%d-%H%M%S)"
-        cp -- "$MANAGED_SCRIPT_PATH" "$backup" || return 2
-        write_ok "Previous manager backed up: $backup"
-        install_self true || return 2
     else
         read_yes_no "ai-tools is not installed. Install $AI_TOOLS_VERSION for this user?" true || return 0
         install_self || return 2

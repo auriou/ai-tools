@@ -1913,22 +1913,23 @@ try {
         ([IO.Path]::GetFullPath($PSCommandPath) -ieq [IO.Path]::GetFullPath($ManagedScriptPath))
     if (-not $runningInstalled) {
         $installedVersion = $null
+        $sameVersion = $false
         if (Test-Path -LiteralPath $ManagedScriptPath -PathType Leaf) {
             $versionMatch = Select-String -LiteralPath $ManagedScriptPath -Pattern '^\$AiToolsVersion = "([0-9]+(?:\.[0-9]+)*)"' | Select-Object -First 1
             if ($versionMatch) { $installedVersion = $versionMatch.Matches[0].Groups[1].Value }
             if ($installedVersion -eq $AiToolsVersion) {
-                Write-OK "ai-tools $AiToolsVersion is already installed. Nothing to do."
-                exit 0
-            }
-            if ($installedVersion -and ([version]$installedVersion -gt [version]$AiToolsVersion)) {
+                Write-OK "ai-tools $AiToolsVersion is already installed."
+                $sameVersion = $true
+            } elseif ($installedVersion -and ([version]$installedVersion -gt [version]$AiToolsVersion)) {
                 Write-Warn2 "Installed ai-tools $installedVersion is newer than this copy ($AiToolsVersion). No downgrade performed."
                 exit 0
+            } else {
+                if (-not (Read-YesNo "Update installed ai-tools to $AiToolsVersion and then manage tools?" $true)) { exit 0 }
+                $backup = "$ManagedScriptPath.backup.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+                Copy-Item -LiteralPath $ManagedScriptPath -Destination $backup -ErrorAction Stop
+                Write-OK "Previous manager backed up: $backup"
+                Install-Self -UpdateOnly
             }
-            if (-not (Read-YesNo "Update installed ai-tools to $AiToolsVersion and then manage tools?" $true)) { exit 0 }
-            $backup = "$ManagedScriptPath.backup.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-            Copy-Item -LiteralPath $ManagedScriptPath -Destination $backup -ErrorAction Stop
-            Write-OK "Previous manager backed up: $backup"
-            Install-Self -UpdateOnly
         } else {
             if (-not (Read-YesNo "ai-tools is not installed. Install $AiToolsVersion for this user?" $true)) { exit 0 }
             Install-Self
@@ -1938,7 +1939,12 @@ try {
         # catalog, including newly added tools, then update selected tools.
         $forward = @()
         if ($PSBoundParameters.Count -eq 0) {
-            $forward = @("-ChooseTools")
+            if ($sameVersion) {
+                if (-not (Read-YesNo "Force reinstall selected tools now?" $false)) { exit 0 }
+                $forward = @("-ForceReinstall")
+            } else {
+                $forward = @("-ChooseTools")
+            }
         } else {
             foreach ($item in $PSBoundParameters.GetEnumerator()) {
                 if ($item.Value -is [switch] -or $item.Value -is [System.Management.Automation.SwitchParameter]) {

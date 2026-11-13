@@ -65,16 +65,16 @@ After installation, open a new terminal. On Windows, fully restart VS Code, VS C
 
 ## Running a downloaded manager script
 
-The Windows and Linux scripts contain a shared manager version (currently `1.1.2`). When executed from Downloads or another path outside the installed manager, they compare this version with the user's installed copy **before** changing anything:
+The Windows and Linux scripts contain a shared manager version (currently `1.1.4`). When executed from Downloads or another path outside the installed manager, they compare this version with the user's installed copy **before** changing anything:
 
 | Installed manager | Behavior |
 | --- | --- |
 | Not installed | Ask permission to install the manager, then offer tool selection and installation. |
-| Same version | Report that ai-tools is current and stop, without reinstalling or updating tools. |
+| Same version | Ask whether to force-reinstall selected tools. Explicit command-line options are passed to the installed manager. |
 | Older / legacy version | Ask permission to update the manager, back up the previous script, then offer the current tool list and update selected tools. |
 | Newer than the downloaded copy | Refuse to downgrade; leave everything unchanged. |
 
-If you decline, no installation or update is performed. Existing selected tools remain in the state file. When proceeding with a new or updated manager without explicit command-line options, the selection menu includes newly supported tools such as REA; the selected tools are installed or updated afterward.
+If you decline, no installation or update is performed. Existing selected tools remain in the state file. Confirming the same-version prompt starts the installed manager in force-reinstall mode and lets you choose tools. Explicit command-line options are forwarded unchanged. When proceeding with a new or updated manager without explicit command-line options, the selection menu includes newly supported tools such as REA; the selected tools are installed or updated afterward.
 
 For normal **tool-only updates** when the manager version is already current, run the installed command (`ai-tools`, `ai-tools --all` or `ai-tools -All`), not the downloaded script.
 
