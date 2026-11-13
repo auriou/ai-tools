@@ -14,6 +14,7 @@ Manage your local tools from one command, with interactive selection, version ch
 | [Token Optimizer](https://github.com/ooples/token-optimizer-mcp) | Reduce context from file reads and searches using optimized MCP tools and caching. | npm; dashboard built from its matching Git tag |
 | [Serena](https://github.com/oraios/serena) | Navigate code through symbols, definitions, and references instead of reading entire files. | `serena-agent` via uv |
 | [Codebase Memory](https://github.com/DeusData/codebase-memory-mcp) | Explore repository architecture and relationships through a code graph. | Official installer and native updater |
+| [REA](https://github.com/morluto/rea) | Analyze Android APKs and binaries via Codex MCP. | Isolated user-level npm installation |
 
 These tools address different sources of unnecessary context. Actual token savings depend on your assistant, workflow, and whether it uses the installed tools.
 
@@ -62,29 +63,27 @@ On the first installation, choose all tools or select them individually. The scr
 
 After installation, open a new terminal. On Windows, fully restart VS Code, VS Code Insiders, and Codex so they pick up PATH changes.
 
-## Updating the manager script
+## Running a downloaded manager script
 
-Download the latest platform script, or pull this repository, then execute that file from any location, including Downloads. You do not need to copy it manually or change your terminal's working directory.
+The Windows and Linux scripts contain a shared manager version (currently `1.1.2`). When executed from Downloads or another path outside the installed manager, they compare this version with the user's installed copy **before** changing anything:
 
-If a manager script is already installed, running another copy replaces only the installed script and exits before the menu, prerequisite checks, or tool updates. The destination is `%USERPROFILE%\.ai-tools\bin\ai-tools.ps1` on Windows or `~/.ai-tools/bin/ai-tools` on Linux. Detection uses the script's full path on Windows and file identity on Linux, not just its name.
+| Installed manager | Behavior |
+| --- | --- |
+| Not installed | Ask permission to install the manager, then offer tool selection and installation. |
+| Same version | Report that ai-tools is current and stop, without reinstalling or updating tools. |
+| Older / legacy version | Ask permission to update the manager, back up the previous script, then offer the current tool list and update selected tools. |
+| Newer than the downloaded copy | Refuse to downgrade; leave everything unchanged. |
 
-The script reports the update and recommends running the installed command afterward:
+If you decline, no installation or update is performed. Existing selected tools remain in the state file. When proceeding with a new or updated manager without explicit command-line options, the selection menu includes newly supported tools such as REA; the selected tools are installed or updated afterward.
 
-```powershell
-ai-tools -All
-```
+For normal **tool-only updates** when the manager version is already current, run the installed command (`ai-tools`, `ai-tools --all` or `ai-tools -All`), not the downloaded script.
 
-```bash
-ai-tools --all
-```
+The installed manager script lives at `%USERPROFILE%\.ai-tools\bin\ai-tools.ps1` on Windows or `~/.ai-tools/bin/ai-tools` on Linux. The old script is backed up alongside it before any manager upgrade.
 
-This script-only update leaves PATH, saved tool selection, state, and MCP configuration unchanged. Even if you pass `-All` or `--all` to the external copy, it only updates the manager when an installed copy exists. Run the installed command to update tools; the all-tools option also installs any missing managed tools.
-
-If no installed copy exists, the normal first-installation workflow runs instead. Running the installed copy retains its normal behavior. Diagnostic mode (`-Check` / `--check`) never copies the script, and Bash `--help` only displays help.
 
 ## Usage
 
-Run `ai-tools` without arguments to open the main menu: install/update, force reinstallation, dashboards, or diagnostics.
+Run `ai-tools` without arguments to open the main menu: install/update, force reinstallation, dashboards, diagnostics, or uninstall tools.
 
 | Action | Windows | Linux |
 | --- | --- | --- |
@@ -98,7 +97,9 @@ Run `ai-tools` without arguments to open the main menu: install/update, force re
 | Skip the Token Optimizer dashboard build | `ai-tools -All -SkipDashboardBuild` | `ai-tools --all --skip-dashboard-build` |
 | Do not install missing prerequisites | `ai-tools -All -SkipPrerequisiteInstall` | `ai-tools --all --skip-prerequisite-install` |
 
-Valid tool identifiers are `RTK`, `TokenOptimizer`, `Serena`, and `CodebaseMemory`. Reinstalling a subset retains the other tools in the saved selection. Changing the selection does not uninstall deselected tools or remove their existing integrations.
+Valid tool identifiers are `RTK`, `TokenOptimizer`, `Serena`, `CodebaseMemory`, and `REA`. Reinstalling a subset retains the other tools in the saved selection. Changing the selection does not uninstall deselected tools or remove their existing integrations.
+
+Choose **Uninstall tools** in the main menu to remove all tools or select them individually. A confirmation is required; successfully removed tools are also removed from the saved selection. Failed removals stay selected. RTK and Codebase Memory are removed only from their managed executable paths; Token Optimizer and Serena are removed using the `npm` and `uv` available on PATH. REA is uninstalled from its isolated npm prefix; its MCP registration is retained for explicit removal using REA’s official uninstall workflow. The manager, prerequisites, dashboards, tool data, PATH entries, and assistant configuration are retained. Remove unwanted MCP entries manually: an existing `npx` entry can download Token Optimizer again. Other copies of executables outside the managed paths are not removed.
 
 Installation state (selection, versions, and last successful run) is saved only after all selected tools and integrations complete successfully. A failed installation exits with an error and can be retried with the installed command, including the force-reinstall options above; an installed package version does not prevent retrying a failed dashboard build. The Token Optimizer dashboard records its Git commit only after both `npm ci` and `npm run build` succeed. Missing build records (including older installations) trigger a rebuild on the next update. Explicitly skipping the dashboard build remains supported.
 
@@ -160,20 +161,30 @@ The manager stores its files under `~/.ai-tools` (`%USERPROFILE%\.ai-tools` on W
 | `apps/` | Token Optimizer dashboard and portable Node.js on Linux when needed |
 | `logs/` | Reserved log directory |
 
-Other tools retain their own installation locations: Token Optimizer uses global npm packages, Serena uses uv, and Codebase Memory uses its official installer. The state file is a record, not the source of truth: actual installed versions are checked on each run.
+Other tools retain their own installation locations: Token Optimizer uses global npm packages, Serena uses uv, Codebase Memory uses its official installer, and REA is installed to `~/.ai-tools/npm` (Linux) or `%USERPROFILE%\.ai-tools\npm` (Windows) with a dedicated npm prefix. The state file is a record, not the source of truth: actual installed versions are checked on each run.
 
 For selected MCP tools, the scripts configure the portable Copilot user MCP file at `$COPILOT_HOME/mcp-config.json`, or `~/.copilot/mcp-config.json` when `COPILOT_HOME` is not set. Managed server entries are added or replaced under `mcpServers`; unrelated entries are retained. The file is backed up before writing, and files that cannot be parsed are left unchanged with a warning. The portable file is shared across Copilot profiles and compatible Copilot tools. Legacy per-profile VS Code `mcp.json` files are not modified; use VS Code's **Migrate** action to move existing servers, or the same server may remain configured in both locations.
 
 When Codex is available, missing MCP servers are added through its CLI, Token Optimizer timeouts are configured, and a managed instruction block is added to its global `AGENTS.md`. Codex paths respect `CODEX_HOME`, defaulting to `~/.codex`. Existing Codex servers are not replaced merely because their command differs.
 
+On Linux, the manager also detects the CLI bundled with the Codex desktop application or the Codex VS Code / VS Code Insiders extension when `codex` is not on PATH. Bundled CLI directories are used only for the current process, since extension updates may replace them.
+
 Copilot guidance is written to `~/.copilot/instructions/ai-tools.instructions.md`, with a backup when replacing an existing file. Serena is configured not to open its dashboard automatically, and Codebase Memory automatic indexing is enabled. RTK initializes client-specific global integration for detected Claude, Copilot, and Codex installations.
 
 Windows uses the user PATH. Linux adds PATH entries to existing `~/.bashrc` and `~/.zshrc` files and to `~/.profile`.
 
+When one tool download fails (for example an HTTP 503 from the RTK release server), the manager retries that download and continues processing other selected tools. Failed tools are reported at the end; rerun the installed manager to retry them.
+
 ## Troubleshooting
 
 - **`ai-tools` is not found:** open a new terminal. On Linux, source your shell startup file if necessary. On Windows, restart applications that were already running.
+- **Codebase Memory rejects `~/.local/bin` permissions on Linux:** review the directory's permissions, then run `chmod go-w "$HOME/.local/bin"` and retry with `"$HOME/.ai-tools/bin/ai-tools" --all` to finish installation and configuration.
 - **A prerequisite is missing:** install it manually or rerun without the prerequisite-skip option. For WinGet, install Microsoft's App Installer if needed.
 - **An MCP configuration is skipped:** check the warning and the JSON syntax. Comments or trailing commas in JSONC may prevent parsing.
 - **A dashboard is unavailable:** install/select its tool first. For Token Optimizer, do not skip the dashboard build, and ensure Git is available. Local dashboard changes are preserved rather than overwritten by a Git update.
 - **More detail is needed:** use `ai-tools -Check -Verbose` on Windows or `ai-tools --check --verbose` on Linux for diagnostics without persistent changes.
+## REA integration (Linux and Windows)
+
+REA is the fifth selectable tool. Install/update it from the main menu, or use `ai-tools --tools=REA` on Linux and `ai-tools -Tools REA` on Windows. It is managed independently of the other tools and installed to a user-owned npm prefix without `sudo` or changes to the normal global npm prefix. The official REA setup wizard registers the MCP server for Codex; this is shared with the Codex VS Code/Insiders extension. REA is also registered automatically in the portable Copilot SDK user MCP configuration when VS Code, VS Code Insiders, Copilot CLI, or that configuration file is detected. Starting with manager version 1.1.3, rerunning installation/update repairs registrations even when the REA package is already current; diagnostics report missing or stale portable Copilot REA entries without writing configuration. This does not modify legacy VS Code profile `mcp.json` files or install native analysis engines. See [REA setup instructions](tools/README-rea.md).
+
+The standalone Linux helper `bash tools/rea.sh install|update|check [--vscode]` remains available. Existing saved selections are preserved; run `--choose-tools` or `-ChooseTools` to opt into REA. `--all`/`-All` includes it.

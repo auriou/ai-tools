@@ -9,6 +9,7 @@
     - Token Optimizer MCP + dashboard
     - Serena + dashboard
     - Codebase Memory MCP + Graph UI
+    - REA (Android APK reverse engineering MCP)
 
     The script installs itself in:
     %USERPROFILE%\.ai-tools\bin\ai-tools.ps1
@@ -38,7 +39,7 @@
 
     MAIN PARAMETERS
     .\ai-tools.ps1
-        Shows the menu: updates, reinstallation, dashboards, or diagnostics.
+        Shows the menu: updates, reinstallation, dashboards, diagnostics, or uninstallation.
 
     .\ai-tools.ps1 -ForceReinstall -All
         Reinstalls all tools, even if they are up to date.
@@ -58,7 +59,7 @@
     .\ai-tools.ps1 -All
         Selects all four tools without prompting.
 
-    .\ai-tools.ps1 -Tools RTK,TokenOptimizer,Serena,CodebaseMemory
+    .\ai-tools.ps1 -Tools RTK,TokenOptimizer,Serena,CodebaseMemory,REA
         Explicit selection, useful for automation.
 
     .\ai-tools.ps1 dash
@@ -93,10 +94,10 @@ param(
     [switch]$All,
     [switch]$ForceReinstall,
 
-    [ValidateSet("RTK","TokenOptimizer","Serena","CodebaseMemory")]
+    [ValidateSet("RTK","TokenOptimizer","Serena","CodebaseMemory","REA")]
     [string[]]$Tools,
 
-    [ValidateSet("RTK","TokenOptimizer","Serena","CodebaseMemory")]
+    [ValidateSet("RTK","TokenOptimizer","Serena","CodebaseMemory","REA")]
     [string]$UI,
 
     [Parameter(Position=0)]
@@ -150,6 +151,10 @@ $SerenaPypi   = "https://pypi.org/pypi/serena-agent/json"
 # Codebase Memory
 $CbmInstallDir   = Join-Path $env:LOCALAPPDATA "Programs\codebase-memory-mcp"
 $CbmExe          = Join-Path $CbmInstallDir "codebase-memory-mcp.exe"
+$ReaPrefix = Join-Path $AiRoot "npm"
+$ReaExe = Join-Path $ReaPrefix "rea.cmd"
+$ReaPackage = "rea-agents"
+
 $CbmInstallerUrl = "https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1"
 $CbmApiLatest    = "https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest"
 
@@ -163,7 +168,7 @@ $CopilotMcpConfigPath    = Join-Path $CopilotHome "mcp-config.json"
 $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
 $CodexAgentsFile = Join-Path $CodexHome "AGENTS.md"
 
-$AllToolNames = @("RTK","TokenOptimizer","Serena","CodebaseMemory")
+$AllToolNames = @("RTK","TokenOptimizer","Serena","CodebaseMemory","REA")
 $InstallPlan = @{}
 $SerenaPython = $null
 
@@ -213,6 +218,10 @@ function Show-ToolDescriptions {
     Write-Host "   Useful for: architecture, dependencies, calls, impact, and semantic search."
     Write-Host "   Includes a local Graph UI."
     Write-Host "   In short: 'understand the whole repository'."
+    Write-Host ""
+    Write-Host "5. REA" -ForegroundColor Yellow
+    Write-Host "   Purpose: analyze Android APKs and software through an MCP server."
+    Write-Host "   Installs to user profile and configures Codex."
     Write-Host ""
 
     Write-Host "How they work together:" -ForegroundColor White
@@ -499,17 +508,21 @@ function Select-ToolsInteractive([string]$Action = "Install") {
             "A" { return @($AllToolNames) }
             "C" {
                 $selected = @()
-                if (Read-YesNo "$Action RTK ?" $true) {
+                $defaultYes = $Action -ne "Uninstall"
+                if (Read-YesNo "$Action RTK ?" $defaultYes) {
                     $selected += "RTK"
                 }
-                if (Read-YesNo "$Action Token Optimizer ?" $true) {
+                if (Read-YesNo "$Action Token Optimizer ?" $defaultYes) {
                     $selected += "TokenOptimizer"
                 }
-                if (Read-YesNo "$Action Serena ?" $true) {
+                if (Read-YesNo "$Action Serena ?" $defaultYes) {
                     $selected += "Serena"
                 }
-                if (Read-YesNo "$Action Codebase Memory ?" $true) {
+                if (Read-YesNo "$Action Codebase Memory ?" $defaultYes) {
                     $selected += "CodebaseMemory"
+                }
+                if (Read-YesNo "$Action REA (Android reverse engineering) ?" $defaultYes) {
+                    $selected += "REA"
                 }
                 return $selected
             }
@@ -548,17 +561,59 @@ function Read-MainAction {
     Write-Host "  [2] Force reinstallation"
     Write-Host "  [3] Dashboards"
     Write-Host "  [4] Diagnostics"
+    Write-Host "  [5] Uninstall tools"
     Write-Host "  [Q] Quit"
     while ($true) {
-        switch ((Read-Host "Choice [1-4/Q]").Trim().ToLowerInvariant()) {
+        switch ((Read-Host "Choice [1-5/Q]").Trim().ToLowerInvariant()) {
             "1" { return "update" }
             "2" { return "reinstall" }
             "3" { return "dash" }
             "4" { return "check" }
+            "5" { return "uninstall" }
             "q" { return "quit" }
             default { Write-Warn2 "Invalid choice." }
         }
     }
+}
+
+function Uninstall-Tools([string[]]$Selected) {
+    Write-Warn2 "Tool data, dashboards, prerequisites, and assistant configuration will be kept."
+    Write-Warn2 "Existing MCP entries may still launch tools; npx can download Token Optimizer again."
+    if (-not (Read-YesNo "Uninstall $($Selected -join ', ') ?" $false)) { return }
+    $State = Load-State
+    Ensure-AiDirectories
+
+    $failed = $false
+    foreach ($tool in $Selected) {
+        try {
+            switch ($tool) {
+                "RTK" { if (Test-Path -LiteralPath $RtkExe) { Remove-Item -LiteralPath $RtkExe -Force } }
+                "TokenOptimizer" { Invoke-External npm "uninstall" "-g" $TokenPackage }
+                "Serena" {
+                    if (-not (Test-Command "uv")) { throw "uv is missing." }
+                    $installedTools = & uv tool list
+                    if ($LASTEXITCODE -ne 0) { throw "uv tool list failed ($LASTEXITCODE)." }
+                    if (($installedTools | Out-String) -match '(?m)^serena-agent\s') {
+                        Invoke-External uv "tool" "uninstall" $SerenaTool
+                    }
+                }
+                "CodebaseMemory" { if (Test-Path -LiteralPath $CbmExe) { Remove-Item -LiteralPath $CbmExe -Force } }
+                "REA" {
+                    if (Test-Path -LiteralPath $ReaExe) { Invoke-External npm "uninstall" "--global" "--prefix" $ReaPrefix $ReaPackage }
+                    Write-Warn2 "REA MCP registrations remain in your user config; use the official REA uninstall workflow if desired."
+                }
+            }
+        } catch {
+            Write-Fail "Cannot uninstall $tool : $($_.Exception.Message)"
+            $failed = $true
+            continue
+        }
+        $State.selectedTools = @($State.selectedTools | Where-Object { $_ -ne $tool })
+        $State.tools.Remove($tool)
+        Save-State $State
+        Write-OK "$tool uninstalled."
+    }
+    if ($failed) { throw "One or more tools could not be uninstalled." }
 }
 
 # ===========================================================================
@@ -817,7 +872,18 @@ function Install-OrUpdate-Rtk($State) {
 
         try {
             Write-Info "Downloading RTK $latest..."
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -Headers @{ "User-Agent"="ai-tools-rtk-updater" }
+            $downloaded = $false
+            for ($attempt = 1; $attempt -le 4; $attempt++) {
+                try {
+                    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -Headers @{ "User-Agent"="ai-tools-rtk-updater" } -ErrorAction Stop
+                    $downloaded = $true
+                    break
+                } catch {
+                    if ($attempt -eq 4) { throw }
+                    Write-Warn2 "RTK download attempt $attempt failed; retrying..."
+                    Start-Sleep -Seconds 2
+                }
+            }
             Expand-Archive -LiteralPath $zip -DestinationPath $ext -Force
 
             $candidate = Get-ChildItem $ext -Filter "rtk.exe" -Recurse | Select-Object -First 1
@@ -1227,6 +1293,68 @@ function Install-OrUpdate-CodebaseMemory($State) {
 }
 
 # ===========================================================================
+# REA (user-level npm installation and Copilot / Codex MCP registration)
+# ===========================================================================
+
+function Get-ReaInstalledVersion {
+    if (-not (Test-Path -LiteralPath $ReaExe)) { return $null }
+    if (-not (Test-Command "npm")) { return $null }
+    try {
+        $json = & npm list --global --prefix $ReaPrefix $ReaPackage --depth=0 --json 2>$null | Out-String
+        $obj = $json | ConvertFrom-Json
+        $dep = $obj.dependencies.PSObject.Properties[$ReaPackage]
+        if ($dep) { return Normalize-Version $dep.Value.version }
+    } catch {}
+    return $null
+}
+
+function Test-ReaNodeVersion {
+    if (-not (Test-Command "node")) { return $false }
+    $nodeVersion = (& node --version | Out-String).Trim().TrimStart('v')
+    try {
+        $v = [version]$nodeVersion
+        return (($v.Major -eq 22 -and $v -ge [version]"22.23.4") -or
+                ($v.Major -eq 24 -and $v -ge [version]"24.22.1") -or
+                ($v.Major -eq 26 -and $v -ge [version]"26.12.1"))
+    } catch { return $false }
+}
+
+function Install-OrUpdate-Rea($State) {
+    Write-Section "REA"
+    $installed = Get-ReaInstalledVersion
+    $latest = $null
+    if (Test-Command "npm") {
+        try { $latest = Normalize-Version ((& npm view $ReaPackage version 2>$null | Out-String).Trim()) } catch {}
+    }
+
+    $wasUpdated = $false
+    if (-not $Check) {
+        Ensure-Node
+        if (-not (Test-ReaNodeVersion)) {
+            throw "REA requires Node.js 22.23.4+, 24.22.1+, or 26.12.1+ in the corresponding major series."
+        }
+        if ($ForceReinstall -or -not $installed -or ($latest -and -not (Compare-VersionText $installed $latest))) {
+            New-Item -ItemType Directory -Force -Path $ReaPrefix | Out-Null
+            if ($ForceReinstall) {
+                Invoke-External npm "install" "--global" "--prefix" $ReaPrefix "--force" "$ReaPackage@latest"
+            } else {
+                Invoke-External npm "install" "--global" "--prefix" $ReaPrefix "$ReaPackage@latest"
+            }
+            $wasUpdated = $true
+            $installed = Get-ReaInstalledVersion
+            if (-not $installed) { throw "REA installation could not be verified." }
+            Write-OK "REA installed: $installed"
+        }
+        if (Test-Path -LiteralPath $ReaPrefix) { Add-UserPath $ReaPrefix }
+        Write-Warn2 "Review the REA Codex MCP setup plan before approval."
+        Invoke-External $ReaExe "setup" "--client" "codex"
+    }
+
+    $status = if (-not $installed) { "not-installed" } elseif ($latest -and (Compare-VersionText $installed $latest)) { "up-to-date" } else { "update-available" }
+    Set-ToolState $State "REA" $installed $latest $status $wasUpdated
+}
+
+# ===========================================================================
 # Copilot global MCP configuration
 # ===========================================================================
 
@@ -1251,6 +1379,10 @@ function Move-McpServerEntry([object]$Servers,[string]$OldName,[string]$NewName)
 
 function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
     $dir = Split-Path $Path -Parent
+    $reaSelected = $Selected -contains "REA"
+    if ($reaSelected -and -not $Check -and -not (Test-Path -LiteralPath $ReaExe -PathType Leaf)) {
+        throw "REA executable not found: $ReaExe"
+    }
 
     if (Test-Path $Path) {
         $raw = Get-Content $Path -Raw
@@ -1258,14 +1390,32 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
             $config = [pscustomobject]@{}
         } else {
             try {
-                $config = $raw | ConvertFrom-Json
+                $config = $raw | ConvertFrom-Json -ErrorAction Stop
             } catch {
+                if ($reaSelected) { throw "Cannot parse REA MCP configuration; file left unchanged: $Path" }
                 Write-Warn2 "Cannot parse JSON/JSONC; file left unchanged: $Path"
                 return
             }
         }
     } else {
         $config = [pscustomobject]@{}
+    }
+
+    if ($reaSelected) {
+        if ($null -eq $config -or $config -isnot [pscustomobject] -or
+            ($config.PSObject.Properties["mcpServers"] -and $config.mcpServers -isnot [pscustomobject])) {
+            throw "Invalid REA MCP configuration; file left unchanged: $Path"
+        }
+        if ($Check) {
+            $entry = if ($config.PSObject.Properties["mcpServers"]) { $config.mcpServers.PSObject.Properties["rea"] } else { $null }
+            if (-not $entry -or $entry.Value.type -cne "stdio" -or
+                $entry.Value.command -cne $ReaExe -or $entry.Value.args -isnot [array] -or
+                $entry.Value.args.Count -ne 1 -or $entry.Value.args[0] -cne "mcp") {
+                throw "REA MCP entry missing or stale: $Path"
+            }
+            Write-Info "REA MCP configuration verified: $Path"
+            return
+        }
     }
 
     if (-not $config.PSObject.Properties["mcpServers"]) {
@@ -1302,6 +1452,16 @@ function Set-McpServersInFile([string]$Path,[string[]]$Selected) {
             args    = @()
         }
         Set-McpServerEntry $config.mcpServers "codebase-memory" $value
+        $changed = $true
+    }
+
+    if ($Selected -contains "REA") {
+        $value = [pscustomobject]@{
+            type    = "stdio"
+            command = $ReaExe
+            args    = @("mcp")
+        }
+        Set-McpServerEntry $config.mcpServers "rea" $value
         $changed = $true
     }
 
@@ -1346,7 +1506,7 @@ function Get-CopilotMcpTargets {
 function Configure-CopilotMcp([string[]]$Selected) {
     Write-Section "Copilot global MCP configuration"
 
-    $mcpTools = @($Selected | Where-Object { $_ -in @("TokenOptimizer","Serena","CodebaseMemory") })
+    $mcpTools = @($Selected | Where-Object { $_ -in @("TokenOptimizer","Serena","CodebaseMemory","REA") })
     if ($mcpTools.Count -eq 0) {
         Write-Info "No MCP tools selected."
         return
@@ -1748,13 +1908,52 @@ function Show-StateSummary($State,[string[]]$Selected) {
 try {
     Refresh-ProcessPath
 
-    if (-not $Check -and
-        (Test-Path -LiteralPath $ManagedScriptPath -PathType Leaf) -and
-        ([IO.Path]::GetFullPath($PSCommandPath) -ine [IO.Path]::GetFullPath($ManagedScriptPath))) {
-        Install-Self -UpdateOnly
-        Write-Host "No tools were installed or updated."
-        Write-Host "Run 'ai-tools -All' to install or update all tools."
-        exit 0
+    # Downloaded copies compare manager versions before modifying user state.
+    $runningInstalled = (Test-Path -LiteralPath $ManagedScriptPath -PathType Leaf) -and
+        ([IO.Path]::GetFullPath($PSCommandPath) -ieq [IO.Path]::GetFullPath($ManagedScriptPath))
+    if (-not $runningInstalled) {
+        $installedVersion = $null
+        if (Test-Path -LiteralPath $ManagedScriptPath -PathType Leaf) {
+            $versionMatch = Select-String -LiteralPath $ManagedScriptPath -Pattern '^\$AiToolsVersion = "([0-9]+(?:\.[0-9]+)*)"' | Select-Object -First 1
+            if ($versionMatch) { $installedVersion = $versionMatch.Matches[0].Groups[1].Value }
+            if ($installedVersion -eq $AiToolsVersion) {
+                Write-OK "ai-tools $AiToolsVersion is already installed. Nothing to do."
+                exit 0
+            }
+            if ($installedVersion -and ([version]$installedVersion -gt [version]$AiToolsVersion)) {
+                Write-Warn2 "Installed ai-tools $installedVersion is newer than this copy ($AiToolsVersion). No downgrade performed."
+                exit 0
+            }
+            if (-not (Read-YesNo "Update installed ai-tools to $AiToolsVersion and then manage tools?" $true)) { exit 0 }
+            $backup = "$ManagedScriptPath.backup.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            Copy-Item -LiteralPath $ManagedScriptPath -Destination $backup -ErrorAction Stop
+            Write-OK "Previous manager backed up: $backup"
+            Install-Self -UpdateOnly
+        } else {
+            if (-not (Read-YesNo "ai-tools is not installed. Install $AiToolsVersion for this user?" $true)) { exit 0 }
+            Install-Self
+        }
+
+        # Preserve explicit options. Without options, offer the complete tool
+        # catalog, including newly added tools, then update selected tools.
+        $forward = @()
+        if ($PSBoundParameters.Count -eq 0) {
+            $forward = @("-ChooseTools")
+        } else {
+            foreach ($item in $PSBoundParameters.GetEnumerator()) {
+                if ($item.Value -is [switch] -or $item.Value -is [System.Management.Automation.SwitchParameter]) {
+                    if ($item.Value.IsPresent) { $forward += "-$($item.Key)" }
+                } elseif ($item.Value -is [array]) {
+                    $forward += "-$($item.Key)"
+                    $forward += ($item.Value -join ",")
+                } else {
+                    $forward += "-$($item.Key)"
+                    $forward += [string]$item.Value
+                }
+            }
+        }
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ManagedScriptPath @forward
+        exit $LASTEXITCODE
     }
 
     if ($PSBoundParameters.Count -eq 0) {
@@ -1766,6 +1965,12 @@ try {
                 $ForceReinstall = $true
                 $Tools = @(Select-ToolsInteractive "Reinstall")
                 if ($Tools.Count -eq 0) { exit 0 }
+            }
+            "uninstall" {
+                $selected = @(Select-ToolsInteractive "Uninstall")
+                if ($selected.Count -eq 0) { exit 0 }
+                Uninstall-Tools $selected
+                exit 0
             }
         }
     }
@@ -1822,22 +2027,40 @@ try {
     } elseif ($selected -contains "TokenOptimizer" -and -not $SkipDashboardBuild) {
         Ensure-Git
     }
+    if ($selected -contains "REA" -and -not $Check) {
+        Ensure-Node
+    }
 
     # Tools
-    if ($selected -contains "RTK")            { Install-OrUpdate-Rtk $state }
-    if ($selected -contains "TokenOptimizer") { Install-OrUpdate-TokenOptimizer $state }
-    if ($selected -contains "Serena")         { Install-OrUpdate-Serena $state }
-    if ($selected -contains "CodebaseMemory") { Install-OrUpdate-CodebaseMemory $state }
+    $failedTools = @()
+    foreach ($tool in $selected) {
+        try {
+            switch ($tool) {
+                "RTK"            { Install-OrUpdate-Rtk $state }
+                "TokenOptimizer" { Install-OrUpdate-TokenOptimizer $state }
+                "Serena"         { Install-OrUpdate-Serena $state }
+                "CodebaseMemory" { Install-OrUpdate-CodebaseMemory $state }
+                "REA"            { Install-OrUpdate-Rea $state }
+            }
+        } catch {
+            Write-Fail "$tool failed: $($_.Exception.Message)"
+            $failedTools += $tool
+            Set-ToolState $state $tool $null $null "failed"
+        }
+    }
 
     # Configure MCP only after binaries are installed / available.
     Configure-CopilotMcp $selected
     Configure-CodexIntegration $selected
     Configure-CopilotInstructions $selected
 
-    if (-not $Check) { Save-State $state }
     Show-StateSummary $state $selected
     Show-UiCommands $selected
 
+    if ($failedTools.Count -gt 0) {
+        throw "Some tools failed: $($failedTools -join ', '). Other selected tools were processed."
+    }
+    if (-not $Check) { Save-State $state }
     if (-not $Check) {
         Write-Warn2 "After the first installation, fully close and restart VS Code, VS Code Insiders, and Codex to pick up PATH changes."
         Write-OK "Installation / update completed."

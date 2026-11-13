@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ai-tools.sh - Install, update, and diagnose local AI tools on Linux.
 #
-# Managed tools: RTK, Token Optimizer MCP (+dashboard), Serena, Codebase Memory MCP (+Graph UI).
+# Managed tools: RTK, Token Optimizer MCP (+dashboard), Serena, Codebase Memory MCP (+Graph UI), REA.
 # Portable: no sudo or system package manager required (Git is only checked).
 #
 # The script installs itself in: ~/.ai-tools/bin/ai-tools
@@ -9,7 +9,7 @@
 # (through ~/.bashrc and ~/.zshrc when present, with ~/.profile as a fallback).
 #
 # Usage : ai-tools --help
-# Without arguments: updates, reinstallation, dashboards, or diagnostics menu.
+# Without arguments: updates, reinstallation, dashboards, diagnostics, or uninstallation menu.
 
 set -uo pipefail
 
@@ -57,6 +57,11 @@ CBM_EXE="$CBM_INSTALL_DIR/codebase-memory-mcp"
 CBM_INSTALLER_URL="https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh"
 CBM_API_LATEST="https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest"
 
+# REA: isolated user-owned npm prefix, shared with tools/rea.sh
+REA_PREFIX="$AI_ROOT/npm"
+REA_EXE="$REA_PREFIX/bin/rea"
+REA_PACKAGE="rea-agents"
+
 # Copilot global user instructions
 COPILOT_INSTRUCTIONS_DIR="$HOME/.copilot/instructions"
 AI_INSTRUCTION_FILE="$COPILOT_INSTRUCTIONS_DIR/ai-tools.instructions.md"
@@ -67,7 +72,7 @@ COPILOT_MCP_CONFIG_PATH="$COPILOT_CONFIG_HOME/mcp-config.json"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 CODEX_AGENTS_FILE="$CODEX_HOME/AGENTS.md"
 
-ALL_TOOL_NAMES=(RTK TokenOptimizer Serena CodebaseMemory)
+ALL_TOOL_NAMES=(RTK TokenOptimizer Serena CodebaseMemory REA)
 
 # ===========================================================================
 # Options / runtime state
@@ -123,7 +128,7 @@ show_help() {
 Usage: ai-tools [options] [dash [token|serena|graph|rtk]]
 
 Install, update, and diagnose local AI tools on Linux.
-Managed tools: RTK, Token Optimizer (+dashboard), Serena, Codebase Memory.
+Managed tools: RTK, Token Optimizer (+dashboard), Serena, Codebase Memory, REA.
 
 If already installed, running an external copy updates only the manager script.
 Then run 'ai-tools --all' to install or update all tools.
@@ -131,9 +136,9 @@ Then run 'ai-tools --all' to install or update all tools.
 Options:
     --check                       Diagnostics only; no persistent changes.
     --choose-tools                Reopen managed tool selection.
-    --all                         Select all four tools without prompting.
+    --all                         Select all five tools without prompting.
     --force-reinstall             Reinstall tools even if they are up to date.
-    --tools=A,B,C                 Explicit selection (RTK,TokenOptimizer,Serena,CodebaseMemory).
+    --tools=A,B,C                 Explicit selection (RTK,TokenOptimizer,Serena,CodebaseMemory,REA).
     --ui=NAME                     Launch the requested UI (RTK|TokenOptimizer|Serena|CodebaseMemory).
     --skip-dashboard-build        Do not build the Token Optimizer dashboard.
     --skip-prerequisite-install   Do not install missing prerequisites (fail if missing).
@@ -141,7 +146,7 @@ Options:
     -h, --help                    Show this help.
 
 Commands:
-    (no arguments)    Main menu: updates, reinstallation, dashboards, diagnostics.
+    (no arguments)    Main menu: updates, reinstallation, dashboards, diagnostics, uninstallation.
     dash              Show managed dashboards and ask which one to launch.
     dash token        Launch the Token Optimizer dashboard directly.
     dash serena       Launch the Serena dashboard directly.
@@ -213,7 +218,7 @@ validate_args() {
         IFS=','
         for t in $TOOLS; do
             case "$t" in
-                RTK|TokenOptimizer|Serena|CodebaseMemory) : ;;
+                RTK|TokenOptimizer|Serena|CodebaseMemory|REA) : ;;
                 *) IFS="$saved_ifs"; write_fail "Invalid tool in --tools: $t"; exit 1 ;;
             esac
         done
@@ -295,6 +300,23 @@ ensure_codex_cli_path() {
             if [ "$CHECK" = true ]; then export PATH="$(dirname "$candidate"):$PATH"; else add_user_path "$(dirname "$candidate")"; fi
             hash -r 2>/dev/null || true
             write_info "Codex CLI detected: $candidate"
+            return 0
+        fi
+    done
+
+    local platform
+    case "$(uname -m)" in
+        x86_64|amd64) platform="linux-x86_64" ;;
+        aarch64|arm64) platform="linux-aarch64" ;;
+        *) platform="" ;;
+    esac
+    for candidate in "/usr/lib/chatgpt/resources/codex" \
+        "$HOME"/.vscode/extensions/openai.chatgpt-*/bin/"$platform"/codex \
+        "$HOME"/.vscode-insiders/extensions/openai.chatgpt-*/bin/"$platform"/codex; do
+        if [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
+            add_user_path "$(dirname "$candidate")" || return 1
+            hash -r 2>/dev/null || true
+            write_info "Bundled Codex CLI detected: $candidate"
             return 0
         fi
     done
@@ -554,6 +576,10 @@ show_tool_descriptions() {
         echo "   Includes a local Graph UI."
         echo "   In short: 'understand the whole repository'."
         echo ""
+        echo -e "${YELLOW}5. REA${NC}"
+        echo "   Purpose: analyze APKs and other software through an MCP server."
+        echo "   Uses a user-level npm installation and configures Codex."
+        echo ""
         echo "How they work together:"
         echo "   RTK -> terminal | Token Optimizer -> context | Serena -> symbols | Codebase Memory -> architecture"
     } >&2
@@ -602,10 +628,13 @@ select_tools_interactive() {
                 ;;
             C)
                 local selected=()
-                read_yes_no "$action RTK ?" true && selected+=("RTK")
-                read_yes_no "$action Token Optimizer ?" true && selected+=("TokenOptimizer")
-                read_yes_no "$action Serena ?" true && selected+=("Serena")
-                read_yes_no "$action Codebase Memory ?" true && selected+=("CodebaseMemory")
+                local default_yes=true
+                [ "$action" = Uninstall ] && default_yes=false
+                read_yes_no "$action RTK ?" "$default_yes" && selected+=("RTK")
+                read_yes_no "$action Token Optimizer ?" "$default_yes" && selected+=("TokenOptimizer")
+                read_yes_no "$action Serena ?" "$default_yes" && selected+=("Serena")
+                read_yes_no "$action Codebase Memory ?" "$default_yes" && selected+=("CodebaseMemory")
+                read_yes_no "$action REA (Android reverse engineering) ?" "$default_yes" && selected+=("REA")
                 SELECTED_TOOLS_CSV=$(IFS=,; echo "${selected[*]}")
                 return
                 ;;
@@ -656,20 +685,74 @@ read_main_action() {
         echo "  [2] Force reinstallation"
         echo "  [3] Dashboards"
         echo "  [4] Diagnostics"
+        echo "  [5] Uninstall tools"
         echo "  [Q] Quit"
     } >&2
     local choice
     while true; do
-        read -r -p "Choice [1-4/Q] " choice || return 1
+        read -r -p "Choice [1-5/Q] " choice || return 1
         case "$choice" in
             1) MAIN_ACTION=update; return 0 ;;
             2) MAIN_ACTION=reinstall; return 0 ;;
             3) MAIN_ACTION=dash; return 0 ;;
             4) MAIN_ACTION=check; return 0 ;;
+            5) MAIN_ACTION=uninstall; return 0 ;;
             q|Q) MAIN_ACTION=quit; return 0 ;;
             *) write_warn "Invalid choice." ;;
         esac
     done
+}
+
+uninstall_tools() {
+    local selected_csv="$1" tool tmp failed=false
+    write_warn "Tool data, dashboards, prerequisites, and assistant configuration will be kept."
+    write_warn "Existing MCP entries may still launch tools; npx can download Token Optimizer again."
+    read_yes_no "Uninstall $selected_csv ?" false || return 0
+    ensure_jq || return 1
+    state_init || return 1
+
+    local tools=()
+    IFS=',' read -r -a tools <<< "$selected_csv"
+    for tool in "${tools[@]}"; do
+        case "$tool" in
+            RTK) rm -f -- "$RTK_EXE" || { failed=true; continue; } ;;
+            TokenOptimizer)
+                if ! command -v npm >/dev/null 2>&1 || ! npm uninstall -g "$TOKEN_PACKAGE"; then
+                    write_fail "Cannot uninstall Token Optimizer with npm."
+                    failed=true; continue
+                fi
+                ;;
+            Serena)
+                local uv_tools
+                if ! command -v uv >/dev/null 2>&1 || ! uv_tools=$(uv tool list); then
+                    write_fail "Cannot uninstall Serena with uv."
+                    failed=true; continue
+                fi
+                if printf '%s\n' "$uv_tools" | grep -Eq '^serena-agent[[:space:]]'; then
+                    if ! uv tool uninstall "$SERENA_TOOL"; then
+                        write_fail "Cannot uninstall Serena with uv."
+                        failed=true; continue
+                    fi
+                fi
+                ;;
+            CodebaseMemory) rm -f -- "$CBM_EXE" || { failed=true; continue; } ;;
+            REA)
+                if [ -x "$REA_EXE" ] && ! npm uninstall --global --prefix "$REA_PREFIX" "$REA_PACKAGE"; then
+                    write_fail "Cannot uninstall REA."; failed=true; continue
+                fi
+                write_warn "REA MCP registrations remain in user configuration; remove them with the official REA uninstall workflow if desired."
+                ;;
+        esac
+        tmp=$(mktemp) || return 1
+        if ! "$JQ" --arg tool "$tool" '.selectedTools = [(.selectedTools // [])[] | select(. != $tool)] | .tools |= ( . // {} | del(.[$tool]) )' "$INSTALLED_STATE_PATH" > "$tmp" || ! mv "$tmp" "$INSTALLED_STATE_PATH"; then
+            rm -f -- "$tmp"
+            write_fail "Could not update state for $tool."
+            return 1
+        fi
+        write_ok "$tool uninstalled."
+    done
+    state_save_last_run || return 1
+    [ "$failed" = false ]
 }
 
 # ===========================================================================
@@ -958,7 +1041,7 @@ install_or_update_rtk() {
 
         local tmp; tmp=$(mktemp -d)
         write_info "Downloading RTK $latest..."
-        curl -fsSL -H "User-Agent: ai-tools-updater" -o "$tmp/$asset" "$dl_url" || { write_fail "RTK download failed."; rm -rf "$tmp"; return 1; }
+        curl --fail --silent --show-error --location --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 15 -H "User-Agent: ai-tools-updater" -o "$tmp/$asset" "$dl_url" || { write_fail "RTK download failed after retries."; rm -rf "$tmp"; return 1; }
 
         if [ -n "$cs_url" ]; then
             curl -fsSL -H "User-Agent: ai-tools-updater" -o "$tmp/checksums.txt" "$cs_url" || true
@@ -1303,6 +1386,19 @@ get_cbm_latest_version() {
 }
 
 install_cbm_official() {
+    local mode
+    if [ -d "$CBM_INSTALL_DIR" ]; then
+        mode=$(stat -Lc '%a' "$CBM_INSTALL_DIR") || {
+            write_fail "Cannot inspect permissions of $CBM_INSTALL_DIR."
+            return 1
+        }
+        if [[ "$mode" =~ ^[0-7]+$ ]] && (( (8#$mode & 8#022) != 0 )); then
+            write_fail "Codebase Memory requires $CBM_INSTALL_DIR to be non-writable by group and others (current mode: $mode)."
+            write_fail "Review the directory permissions, then run: chmod go-w \"\$HOME/.local/bin\""
+            write_fail "Retry the full installation with: \"\$HOME/.ai-tools/bin/ai-tools\" --all"
+            return 1
+        fi
+    fi
     local tag
     tag=$(printf '%s' "$CBM_RELEASE_JSON" | "$JQ" -er '.tag_name') || return 1
     local installer_url="${CBM_INSTALLER_URL/\/main\//\/$tag\/}"
@@ -1357,6 +1453,57 @@ install_or_update_codebase_memory() {
 }
 
 # ===========================================================================
+# REA (Android APK reverse engineering)
+# ===========================================================================
+
+get_rea_installed_version() {
+    [ -x "$REA_EXE" ] || return 0
+    [ -x "$(command -v node 2>/dev/null)" ] || return 0
+    local json
+    json=$(npm list --global --prefix "$REA_PREFIX" "$REA_PACKAGE" --depth=0 --json 2>/dev/null) || return 0
+    printf '%s' "$json" | "$JQ" -r '.dependencies["rea-agents"].version // empty' 2>/dev/null
+}
+
+install_or_update_rea() {
+    write_section "REA"
+    local installed latest was_updated=false
+    installed=$(get_rea_installed_version)
+    latest=""
+    if command -v npm >/dev/null 2>&1; then
+        latest=$(npm view "$REA_PACKAGE" version 2>/dev/null | tr -d '\r') || true
+    fi
+    if [ "$CHECK" != true ]; then
+        ensure_node
+        if ! node -e 'const [a,b,c]=process.versions.node.split(".").map(Number); process.exit(((a===22&&(b>23||(b===23&&c>=4)))||(a===24&&(b>22||(b===22&&c>=1)))||(a===26&&(b>12||(b===12&&c>=1))))?0:1)' ; then
+            write_fail "Node.js version unsupported by REA: $(node --version)"
+            return 1
+        fi
+        if [ "$FORCE_REINSTALL" = true ] || [ -z "$installed" ] || { [ -n "$latest" ] && ! compare_version_text "$installed" "$latest"; }; then
+            mkdir -p "$REA_PREFIX"
+            local flags=(install --global --prefix "$REA_PREFIX")
+            [ "$FORCE_REINSTALL" = true ] && flags+=(--force)
+            npm "${flags[@]}" "${REA_PACKAGE}@latest" || return 1
+            was_updated=true
+            installed=$(get_rea_installed_version)
+            [ -n "$installed" ] || { write_fail "REA was not installed correctly."; return 1; }
+            write_ok "REA installed: $installed"
+        fi
+        add_user_path "$REA_PREFIX/bin"
+        write_warn "Review REA's Codex MCP setup plan before approving."
+        "$REA_EXE" setup --client codex || return 1
+    fi
+    local status="not-installed"
+    if [ -n "$installed" ]; then
+        if [ -n "$latest" ] && compare_version_text "$installed" "$latest"; then
+            status="up-to-date"
+        else
+            status="update-available"
+        fi
+    fi
+    state_set_tool "REA" "$installed" "$latest" "$status" "$was_updated"
+}
+
+# ===========================================================================
 # Copilot global MCP configuration
 # ===========================================================================
 
@@ -1378,6 +1525,7 @@ set_mcp_servers_in_file() {
             config=$(cat "$path")
         else
             write_warn "Cannot parse JSON/JSONC; file left unchanged: $path"
+            case ",$selected_csv," in *,REA,*) return 1 ;; esac
             return
         fi
     fi
@@ -1396,6 +1544,21 @@ set_mcp_servers_in_file() {
 
     case ",$selected_csv," in *,CodebaseMemory,*)
         config=$(printf '%s' "$config" | "$JQ" '.mcpServers = (((.mcpServers // {}) | del(."codebase-memory-mcp")) + {"codebase-memory": {type:"stdio", command:"codebase-memory-mcp", args:[]}})')
+        changed=true
+    ;; esac
+
+    case ",$selected_csv," in *,REA,*)
+        if [ "$CHECK" = true ]; then
+            if ! printf '%s' "$config" | "$JQ" -e --arg command "$REA_EXE" '.mcpServers.rea | .type == "stdio" and .command == $command and .args == ["mcp"]' >/dev/null; then
+                write_warn "REA MCP registration missing or stale: $path"
+                return 1
+            fi
+        elif [ ! -x "$REA_EXE" ]; then
+            write_fail "REA executable missing; MCP registration not written: $REA_EXE"
+            return 1
+        else
+            config=$(printf '%s' "$config" | "$JQ" --arg command "$REA_EXE" '.mcpServers = ((.mcpServers // {}) + {"rea": {type:"stdio", command:$command, args:["mcp"]}})') || return 1
+        fi
         changed=true
     ;; esac
 
@@ -1423,7 +1586,7 @@ configure_copilot_mcp() {
     write_section "Copilot global MCP configuration"
 
     local mcp_relevant=false
-    case ",$selected_csv," in *,TokenOptimizer,*|*,Serena,*|*,CodebaseMemory,*) mcp_relevant=true ;; esac
+    case ",$selected_csv," in *,TokenOptimizer,*|*,Serena,*|*,CodebaseMemory,*|*,REA,*) mcp_relevant=true ;; esac
     if [ "$mcp_relevant" != true ]; then
         write_info "No MCP tools selected."
         return
@@ -1466,6 +1629,16 @@ add_codex_mcp_server() {
         return 1
     fi
 
+    local config_path="$CODEX_HOME/config.toml" backup
+    if [ -f "$config_path" ]; then
+        backup=$(mktemp "$config_path.backup.XXXXXXXX") || return 1
+        if ! cp -- "$config_path" "$backup"; then
+            rm -f -- "$backup"
+            write_fail "Cannot back up Codex configuration: $config_path"
+            return 1
+        fi
+    fi
+
     if ! codex mcp add "$name" -- "$command" "$@"; then
         write_fail "Codex MCP server configuration failed: $name"
         return 1
@@ -1500,8 +1673,8 @@ set_codex_mcp_timeouts() {
         in_section && /^\[/ { exit }
         in_section { print }
     ' "$config_path")
-    if printf '%s\n' "$current_section" | grep -Eq "^startup_timeout_sec[[:space:]]*=[[:space:]]*$startup_timeout[[:space:]]*$" &&
-       printf '%s\n' "$current_section" | grep -Eq "^tool_timeout_sec[[:space:]]*=[[:space:]]*$tool_timeout[[:space:]]*$"; then
+     if printf '%s\n' "$current_section" | grep -Eq "^startup_timeout_sec[[:space:]]*=[[:space:]]*$startup_timeout(\\.0+)?[[:space:]]*$" &&
+         printf '%s\n' "$current_section" | grep -Eq "^tool_timeout_sec[[:space:]]*=[[:space:]]*$tool_timeout(\\.0+)?[[:space:]]*$"; then
         write_info "Codex MCP timeouts already configured: $name"
         return
     fi
@@ -1883,13 +2056,48 @@ show_ui_commands() {
 # MAIN
 # ===========================================================================
 
+# Handle a downloaded / externally launched copy before touching tool state.
+# A matching installed version is intentionally a no-op.
+handle_external_copy() {
+    local source="${BASH_SOURCE[0]}"
+    [ -f "$source" ] || return 1
+    if [ -f "$MANAGED_SCRIPT_PATH" ] && [ "$source" -ef "$MANAGED_SCRIPT_PATH" ]; then return 1; fi
+
+    local installed_version="" action=""
+    if [ -f "$MANAGED_SCRIPT_PATH" ]; then
+        installed_version=$(sed -n 's/^AI_TOOLS_VERSION="\([0-9][0-9.]*\)"$/\1/p' "$MANAGED_SCRIPT_PATH" | head -n1)
+        if [ "$installed_version" = "$AI_TOOLS_VERSION" ]; then
+            write_ok "ai-tools $AI_TOOLS_VERSION is already installed. Nothing to do."
+            return 0
+        fi
+        if [ -n "$installed_version" ] && [ "$(printf '%s\n' "$AI_TOOLS_VERSION" "$installed_version" | sort -V | tail -n1)" = "$installed_version" ]; then
+            write_warn "Installed ai-tools $installed_version is newer than this copy ($AI_TOOLS_VERSION). No downgrade performed."
+            return 0
+        fi
+        write_info "Installed manager: ${installed_version:-legacy (unversioned)}; downloaded: $AI_TOOLS_VERSION"
+        read_yes_no "Update installed ai-tools to $AI_TOOLS_VERSION and then manage tools?" true || return 0
+        local backup="$MANAGED_SCRIPT_PATH.backup.$(date +%Y%m%d-%H%M%S)"
+        cp -- "$MANAGED_SCRIPT_PATH" "$backup" || return 2
+        write_ok "Previous manager backed up: $backup"
+        install_self true || return 2
+    else
+        read_yes_no "ai-tools is not installed. Install $AI_TOOLS_VERSION for this user?" true || return 0
+        install_self || return 2
+    fi
+
+    # Keep explicit CLI choices; otherwise offer the updated tool catalog
+    # and update selected tools (including any newly selected tools).
+    local args=("${ORIGINAL_ARGS[@]}")
+    if [ ${#args[@]} -eq 0 ]; then args=(--choose-tools); fi
+    write_info "Launching the installed manager: ${args[*]}"
+    bash "$MANAGED_SCRIPT_PATH" "${args[@]}"
+    return $?
+}
+
 main() {
-    if [ "$CHECK" != true ] && [ -f "$MANAGED_SCRIPT_PATH" ] &&
-       [ ! "${BASH_SOURCE[0]}" -ef "$MANAGED_SCRIPT_PATH" ]; then
-        install_self true || return 1
-        echo "No tools were installed or updated." >&2
-        echo "Run 'ai-tools --all' to install or update all tools." >&2
-        return 0
+    if [ "$EXTERNAL_COPY" = true ]; then
+        handle_external_copy
+        return $?
     fi
 
     if [ "$INTERACTIVE_MENU" = true ]; then
@@ -1903,6 +2111,13 @@ main() {
                 select_tools_interactive Reinstall || return 1
                 TOOLS="$SELECTED_TOOLS_CSV"
                 if [ -z "$TOOLS" ]; then return 0; fi
+                ;;
+            uninstall)
+                select_tools_interactive Uninstall || return 1
+                TOOLS="$SELECTED_TOOLS_CSV"
+                if [ -z "$TOOLS" ]; then return 0; fi
+                uninstall_tools "$TOOLS"
+                return $?
                 ;;
         esac
     fi
@@ -1961,20 +2176,32 @@ main() {
     elif [[ ",$selected_csv," == *,TokenOptimizer,* ]] && [ "$SKIP_DASHBOARD_BUILD" != true ]; then
         ensure_git
     fi
+    if [ "$CHECK" != true ] && [[ ",$selected_csv," == *,REA,* ]]; then ensure_node; fi
 
-    case ",$selected_csv," in *,RTK,*) install_or_update_rtk || exit 1 ;; esac
-    case ",$selected_csv," in *,TokenOptimizer,*) install_or_update_token_optimizer || exit 1 ;; esac
-    case ",$selected_csv," in *,Serena,*) install_or_update_serena || exit 1 ;; esac
-    case ",$selected_csv," in *,CodebaseMemory,*) install_or_update_codebase_memory || exit 1 ;; esac
+    # One unavailable download must not prevent unrelated tools from updating.
+    local failed_tools=()
+    case ",$selected_csv," in *,RTK,*) install_or_update_rtk || failed_tools+=("RTK") ;; esac
+    case ",$selected_csv," in *,TokenOptimizer,*) install_or_update_token_optimizer || failed_tools+=("TokenOptimizer") ;; esac
+    case ",$selected_csv," in *,Serena,*) install_or_update_serena || failed_tools+=("Serena") ;; esac
+    case ",$selected_csv," in *,CodebaseMemory,*) install_or_update_codebase_memory || failed_tools+=("CodebaseMemory") ;; esac
+    case ",$selected_csv," in *,REA,*) install_or_update_rea || failed_tools+=("REA") ;; esac
+    local failed_tool
+    for failed_tool in "${failed_tools[@]}"; do
+        state_set_tool "$failed_tool" "" "" "failed"
+    done
 
     configure_copilot_mcp "$selected_csv" || return 1
     configure_codex_integration "$selected_csv" || exit 1
     configure_copilot_instructions "$selected_csv" || return 1
 
-    state_save_last_run || return 1
     show_state_summary "$selected_csv"
     show_ui_commands "$selected_csv"
 
+    if [ ${#failed_tools[@]} -gt 0 ]; then
+        write_warn "Some tools failed: ${failed_tools[*]}. Other selected tools were processed."
+        return 1
+    fi
+    state_save_last_run || return 1
     if [ "$CHECK" != true ]; then
         write_warn "After the first installation, open a new terminal (or source ~/.bashrc / ~/.profile) to pick up PATH changes."
         write_ok "Installation / update completed."
@@ -1983,6 +2210,11 @@ main() {
     fi
 }
 
+ORIGINAL_ARGS=("$@")
+EXTERNAL_COPY=false
+if [ -f "${BASH_SOURCE[0]}" ]; then
+    if [ ! -f "$MANAGED_SCRIPT_PATH" ] || [ ! "${BASH_SOURCE[0]}" -ef "$MANAGED_SCRIPT_PATH" ]; then EXTERNAL_COPY=true; fi
+fi
 parse_args "$@"
 validate_args
 main
